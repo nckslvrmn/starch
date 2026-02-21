@@ -1,0 +1,25 @@
+#!/bin/bash
+set -uo pipefail
+
+. /usr/local/lib/starch/profile.sh
+
+starch_profile_init
+starch_session_begin plex
+starch_check_gpu_modules plex-session
+starch_wait_for_drm plex-session
+starch_apply_gpu_env
+
+starch_wait_for_audio plex-session
+
+mapfile -t FP_ENV < <(starch_flatpak_env_args)
+
+GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync --hdr-enabled)
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
+
+if [ "$STARCH_PROFILE" = "optimus" ]; then
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+fi
+
+echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
+exec gamescope "${GAMESCOPE_ARGS[@]}" -- \
+    flatpak run --device=dri "${FP_ENV[@]}" tv.plex.PlexHTPC

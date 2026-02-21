@@ -1,0 +1,95 @@
+#!/bin/bash
+
+_configure_displays() {
+    if ! command -v wlr-randr >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        echo "[river/init] wlr-randr or jq not found — skipping display configuration"
+        return
+    fi
+
+    local wlr_json
+    wlr_json=$(wlr-randr --json 2>/dev/null) || {
+        echo "[river/init] wlr-randr failed — skipping display configuration"
+        return
+    }
+
+    local primary="${STARCH_PRIMARY_OUTPUT:-}"
+    local cursor_x=0
+
+    _apply_output() {
+        local name="$1" width="$2" height="$3" refresh_mhz="$4"
+        local refresh_hz
+        if [ "$refresh_mhz" -gt 1000 ] 2>/dev/null; then
+            refresh_hz=$(( refresh_mhz / 1000 ))
+        else
+            refresh_hz="$refresh_mhz"
+        fi
+
+        local scale="1"
+        if [ "$height" -ge 2160 ]; then
+            scale="2"
+        elif [ "$height" -ge 1440 ]; then
+            scale="1.5"
+        fi
+
+        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz scale=${scale} pos=${cursor_x},0"
+        wlr-randr --output "$name" --on \
+            --mode "${width}x${height}@${refresh_hz}" \
+            --scale "$scale" \
+            --pos "${cursor_x},0"
+
+        cursor_x=$(( cursor_x + width * 10 / $(awk -v s="$scale" 'BEGIN{print int(s*10)}') ))
+    }
+
+    local name width height refresh_mhz
+    if [ -n "$primary" ]; then
+        while IFS=$'\t' read -r name width height refresh_mhz; do
+            [ "$name" = "$primary" ] || continue
+            _apply_output "$name" "$width" "$height" "$refresh_mhz"
+        done < <(echo "$wlr_json" | jq -r '
+            .[] |
+            (.modes | max_by(.refresh)) as $m |
+            [.name,
+             ($m.width  | tostring),
+             ($m.height | tostring),
+             ($m.refresh | tostring)] | @tsv
+        ')
+    fi
+
+    while IFS=$'\t' read -r name width height refresh_mhz; do
+        [ "$name" = "$primary" ] && continue
+        _apply_output "$name" "$width" "$height" "$refresh_mhz"
+    done < <(echo "$wlr_json" | jq -r '
+        .[] |
+        (.modes | max_by(.refresh)) as $m |
+        [.name,
+         ($m.width  | tostring),
+         ($m.height | tostring),
+         ($m.refresh | tostring)] | @tsv
+    ')
+}
+
+_configure_displays
+
+riverctl map normal Alt Shift Tab focus-prev
+riverctl map normal Alt Tab       focus-next
+riverctl map normal Alt Tab       zoom
+riverctl map normal Super Space   spawn fuzzel
+riverctl map normal Super+Shift E exit
+
+riverctl map normal Super Left  send-layout-cmd riversnap "left"
+riverctl map normal Super Right send-layout-cmd riversnap "right"
+riverctl map normal Super Up    send-layout-cmd riversnap "full"
+
+riverctl map normal None XF86AudioRaiseVolume  spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+'
+riverctl map normal None XF86AudioLowerVolume  spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-'
+riverctl map normal None XF86AudioMute         spawn 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle'
+
+riverctl map normal None XF86MonBrightnessUp   spawn 'brightnessctl set 5%+'
+riverctl map normal None XF86MonBrightnessDown spawn 'brightnessctl set 5%-'
+
+riverctl background-color 0x000000
+
+riversnap &
+riverctl default-layout riversnap
+
+/usr/bin/ghostty &

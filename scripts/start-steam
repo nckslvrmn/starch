@@ -1,0 +1,36 @@
+#!/bin/bash
+set -uo pipefail
+
+. /usr/local/lib/starch/profile.sh
+
+starch_profile_init
+starch_session_begin steam
+starch_check_gpu_modules steam-session
+starch_wait_for_drm steam-session
+starch_apply_gpu_env
+
+export PROTON_ENABLE_NVAPI=1
+export DXVK_ASYNC=1
+export STEAM_RUNTIME_HEAVY=1
+export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
+export STEAM_GAMESCOPE_SESSION=1
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
+starch_wait_for_audio steam-session
+
+GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled)
+
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
+
+if [ "$STARCH_PROFILE" = "optimus" ]; then
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+fi
+
+mapfile -t PRIME_ENV < <(starch_prime_env env)
+
+echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
+if [ ${#PRIME_ENV[@]} -gt 0 ]; then
+    exec dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- env "${PRIME_ENV[@]}" steam -gamepadui -steamos3
+else
+    exec dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui -steamos3
+fi

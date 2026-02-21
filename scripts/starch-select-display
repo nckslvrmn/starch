@@ -1,0 +1,66 @@
+#!/bin/bash
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starch"
+CONF_FILE="$CONF_DIR/display.conf"
+
+usage() {
+    cat <<'EOF'
+starch-select-display — pick which output should be the primary display.
+
+Usage:
+  starch-select-display                 interactive whiptail menu
+  starch-select-display auto|internal|external
+  starch-select-display --show          print current preference
+
+Values:
+  auto      prefer external (HDMI/DP) if connected, else internal eDP
+  internal  always use the internal laptop panel
+  external  always use the first connected external output,
+            falling back to internal if nothing is plugged in
+EOF
+}
+
+current() {
+    [ -r "$CONF_FILE" ] || { echo "auto"; return; }
+    ( . "$CONF_FILE"; echo "${PRIMARY:-auto}" )
+}
+
+save() {
+    local choice="$1"
+    case "$choice" in
+        auto|internal|external) ;;
+        *) echo "error: invalid choice '$choice' (expected auto|internal|external)" >&2; exit 1 ;;
+    esac
+    mkdir -p "$CONF_DIR"
+    umask 077
+    cat > "$CONF_FILE" <<EOF
+PRIMARY=$choice
+EOF
+    echo "starch: primary display preference set to '$choice'"
+}
+
+if [ $# -gt 0 ]; then
+    case "$1" in
+        --show|-s) current; exit 0 ;;
+        auto|internal|external) save "$1"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; exit 1 ;;
+    esac
+fi
+
+if ! command -v whiptail >/dev/null 2>&1; then
+    echo "whiptail not found; pass the choice as an argument instead." >&2
+    echo "  starch-select-display auto|internal|external" >&2
+    exit 1
+fi
+
+cur="$(current)"
+choice=$(whiptail --title "starch — primary display" \
+    --default-item "$cur" \
+    --menu "Which display should sessions render to by default?" 15 60 3 \
+    "auto"     "Prefer external when connected, else internal" \
+    "internal" "Always the internal laptop panel (eDP)" \
+    "external" "Always an external display (HDMI/DP)" \
+    3>&1 1>&2 2>&3)
+save "$choice"

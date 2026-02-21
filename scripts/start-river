@@ -1,0 +1,46 @@
+#!/bin/bash
+set -uo pipefail
+
+. /usr/local/lib/starch/profile.sh
+
+starch_profile_init
+starch_session_begin river
+starch_check_gpu_modules river-session
+starch_wait_for_drm river-session
+starch_apply_gpu_env
+
+export XDG_CURRENT_DESKTOP=river
+export MOZ_ENABLE_WAYLAND=1
+export SDL_VIDEODRIVER=wayland
+
+export XCURSOR_SIZE=32
+export GDK_DPI_SCALE=1
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+export ELECTRON_OZONE_PLATFORM_HINT=auto
+
+export XENVIRONMENT="${XENVIRONMENT:-}"
+if [ ! -f "$HOME/.Xresources" ] || ! grep -q 'Xft\.dpi' "$HOME/.Xresources" 2>/dev/null; then
+    mkdir -p "$HOME"
+    echo 'Xft.dpi: 96' >> "$HOME/.Xresources"
+fi
+
+echo "[river-session] WLR_DRM_DEVICES=${WLR_DRM_DEVICES:-<unset>}"
+echo "[river-session] __EGL_VENDOR_LIBRARY_FILENAMES=${__EGL_VENDOR_LIBRARY_FILENAMES:-<unset>}"
+echo "[river-session] __GLX_VENDOR_LIBRARY_NAME=${__GLX_VENDOR_LIBRARY_NAME:-<unset>}"
+echo "[river-session] GBM_BACKEND=${GBM_BACKEND:-<unset>}"
+echo "[river-session] VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-<unset>}"
+
+if [ -n "${WLR_DRM_DEVICES:-}" ]; then
+    IFS=: read -ra _drm_devs <<< "$WLR_DRM_DEVICES"
+    for _d in "${_drm_devs[@]}"; do
+        if [ ! -e "$_d" ]; then
+            echo "[river-session] ERROR: WLR_DRM_DEVICES references $_d but it does not exist!"
+            echo "[river-session] Available cards:"
+            ls -la /dev/dri/card* 2>/dev/null || echo "  (none)"
+        fi
+    done
+fi
+
+starch_wait_for_audio river-session
+
+exec river

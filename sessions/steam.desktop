@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Steam
+Comment=Minimal gamescope+Steam session — controller-first, maximum performance
+Exec=/usr/local/bin/start-steam
+Type=Application
+DesktopNames=gamescope

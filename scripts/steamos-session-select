@@ -1,0 +1,22 @@
+#!/bin/bash
+set -u
+
+case "${1:-}" in
+    desktop|gamescope) ;;
+    ""|-h|--help)
+        echo "Usage: steamos-session-select {desktop|gamescope}"
+        exit 1
+        ;;
+    *)
+        echo "steamos-session-select: unknown target '$1' (expected desktop|gamescope)" >&2
+        exit 1
+        ;;
+esac
+
+if ! pgrep -x gamescope >/dev/null 2>&1; then
+    echo "steamos-session-select: gamescope is not running — nothing to switch from." >&2
+    echo "  Log out via your current session instead, then pick one at the SDDM greeter." >&2
+    exit 2
+fi
+
+pkill -TERM -x gamescope
