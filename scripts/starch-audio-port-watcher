@@ -1,0 +1,81 @@
+#!/bin/bash
+# starch-audio-port-watcher — runs as a user systemd service. Watches
+# default-sink changes via `pactl subscribe`; when a starch virtual sink
+# becomes default, sets the underlying card's profile and port so audio
+# actually comes out the chosen physical jack.
+set -u
+
+META="${XDG_CONFIG_HOME:-$HOME/.config}/starch/audio-sinks.conf"
+
+if [ ! -r "$META" ]; then
+    echo "starch-audio-port-watcher: no metadata at $META; run starch-audio-setup first." >&2
+    exit 1
+fi
+
+log() { printf '[starch-audio] %s\n' "$*"; }
+
+# Ensure each loopback's playback stream is explicitly linked to its
+# underlying ALSA sink. We do this rather than rely on WirePlumber's
+# auto-routing (which cross-links to other Audio/Sink nodes when there
+# are several virtual sinks in the graph).
+ensure_links() {
+    local node card profile port target
+    while IFS=$'\t' read -r node card profile port target; do
+        case "$node" in ''|\#*) continue ;; esac
+        # Skip if target sink doesn't currently exist.
+        pactl list short sinks | awk '{print $2}' | grep -qx "$target" || continue
+        pw-link "$node.playback:output_FL" "$target:playback_FL" 2>/dev/null || true
+        pw-link "$node.playback:output_FR" "$target:playback_FR" 2>/dev/null || true
+    done < "$META"
+}
+
+apply_for_sink() {
+    local sink="$1"
+    local node card profile port target line
+    while IFS=$'\t' read -r node card profile port target; do
+        case "$node" in ''|\#*) continue ;; esac
+        if [ "$node" = "$sink" ]; then
+            log "Selected $sink → card=$card profile=$profile port=$port target=$target"
+            # Set profile if needed (skip if already active).
+            local current_profile
+            current_profile=$(pactl -f json list cards \
+                | jq -r --arg c "$card" '.[] | select(.name == $c) | .active_profile')
+            if [ "$current_profile" != "$profile" ]; then
+                pactl set-card-profile "$card" "$profile" 2>/dev/null \
+                    || log "warn: failed to set profile $profile on $card"
+            fi
+            # Wait briefly for the underlying sink to materialize after a profile change.
+            for _ in $(seq 1 5); do
+                pactl list short sinks | grep -q "[[:space:]]${target}[[:space:]]" && break
+                sleep 0.2
+            done
+            # Set the port on the underlying sink (no-op for HDMI single-port sinks).
+            pactl set-sink-port "$target" "$port" 2>/dev/null || true
+            return 0
+        fi
+    done < "$META"
+}
+
+# Wait for PipeWire to be ready, then ensure loopback links exist.
+for _ in $(seq 1 10); do
+    pactl info >/dev/null 2>&1 && break
+    sleep 0.5
+done
+ensure_links
+
+# Apply once at startup in case a starch sink is already default.
+current=$(pactl get-default-sink 2>/dev/null || true)
+[ -n "$current" ] && apply_for_sink "$current"
+
+# Subscribe to server events. New default sink shows up as "Event 'change' on server".
+pactl subscribe 2>/dev/null | while read -r line; do
+    case "$line" in
+        *"'change' on server"*)
+            new=$(pactl get-default-sink 2>/dev/null || true)
+            if [ -n "$new" ] && [ "$new" != "$current" ]; then
+                current="$new"
+                apply_for_sink "$new"
+            fi
+            ;;
+    esac
+done

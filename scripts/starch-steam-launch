@@ -1,0 +1,26 @@
+#!/bin/bash
+# Run a command in a bubblewrap container where /etc/os-release reports
+# SteamOS. Steam's gamepadui only wires up the "Switch to Desktop" and
+# power-menu actions (which call steamos-session-select) when its os-release
+# marker check passes; without this wrapper the button does nothing.
+#
+# The host /etc/os-release is unchanged outside this process tree.
+set -eu
+
+SPOOF=/etc/starch/os-release.steamos
+if [ ! -r "$SPOOF" ]; then
+    echo "starch-steam-launch: $SPOOF missing — re-run install.sh" >&2
+    exec "$@"
+fi
+
+if ! command -v bwrap >/dev/null 2>&1; then
+    echo "starch-steam-launch: bwrap not installed — re-run install.sh" >&2
+    exec "$@"
+fi
+
+# /etc/os-release is a symlink to /usr/lib/os-release on Arch; bind the
+# target so readers that resolve the symlink see the spoof too.
+exec bwrap \
+    --dev-bind / / \
+    --bind "$SPOOF" /usr/lib/os-release \
+    -- "$@"

@@ -1,0 +1,47 @@
+#!/bin/bash
+set -uo pipefail
+
+. /usr/local/lib/starch/profile.sh
+
+starch_profile_init || exit 1
+starch_session_begin steam
+starch_check_gpu_modules steam-session || exit 1
+starch_wait_for_drm steam-session || exit 1
+starch_apply_gpu_env
+
+export PROTON_ENABLE_NVAPI=1
+export DXVK_ASYNC=1
+export STEAM_RUNTIME_HEAVY=1
+export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
+export STEAM_GAMESCOPE_SESSION=1
+XDG_RUNTIME_DIR=/run/user/$(id -u)
+export XDG_RUNTIME_DIR
+
+starch_ensure_audio steam-session
+
+GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled)
+
+REFRESH=$(starch_probe_refresh)
+[ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"
+
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
+
+if [ "$STARCH_PROFILE" = "optimus" ]; then
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+fi
+
+mapfile -t PRIME_ENV < <(starch_prime_env env)
+
+echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
+# starch-steam-launch wraps Steam in a private mount namespace where
+# /etc/os-release is bound to the steamos spoof, so gamepadui's
+# "Switch to Desktop" / power-menu actions fire steamos-session-select.
+if [ ${#PRIME_ENV[@]} -gt 0 ]; then
+    starch_run_compositor steam-session -- \
+        dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- \
+            starch-steam-launch env "${PRIME_ENV[@]}" steam -gamepadui -steamos3
+else
+    starch_run_compositor steam-session -- \
+        dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- \
+            starch-steam-launch steam -gamepadui -steamos3
+fi

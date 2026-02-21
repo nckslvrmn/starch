@@ -1,0 +1,13 @@
+[Unit]
+Description=starch audio port watcher
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/starch-audio-port-watcher
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

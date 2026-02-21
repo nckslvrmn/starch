@@ -1,0 +1,253 @@
+#!/bin/bash
+# starch-audio-setup — discover audio output ports across all sound cards
+# and expose each as a selectable PipeWire sink (visible to Steam, etc.).
+#
+# Per-port virtual sinks loopback to the underlying ALSA sink; a small
+# user-level watcher service flips the card profile and port when you
+# select one of them as the default output. Auto-switch on headphone
+# plug (PipeWire's default behavior) is left intact.
+#
+# Run as your normal user (no sudo). Idempotent — safe to re-run any time
+# you add an HDMI display, change cards, etc.
+set -u
+
+green() { printf '\e[32m[starch]\e[0m %s\n' "$*"; }
+warn()  { printf '\e[33m[starch]\e[0m WARN: %s\n' "$*"; }
+err()   { printf '\e[31m[starch]\e[0m ERROR: %s\n' "$*" >&2; }
+
+if [ "$(id -u)" -eq 0 ]; then
+    err "Run as your regular user, not root."
+    exit 1
+fi
+
+INCLUDE_PHANTOM=0
+if [ "${1:-}" = "--include-unavailable" ]; then
+    INCLUDE_PHANTOM=1
+fi
+
+PW_CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d"
+STARCH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starch"
+SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+BIN_DIR="$HOME/.local/bin"
+
+PW_CONF="$PW_CONF_DIR/10-starch-virtual-sinks.conf"
+META="$STARCH_DIR/audio-sinks.conf"
+WATCHER_SRC="$(dirname "$(readlink -f "$0")")/starch-audio-port-watcher"
+WATCHER_DST="$BIN_DIR/starch-audio-port-watcher"
+UNIT_SRC="$(dirname "$(readlink -f "$0")")/starch-audio-port-watcher.service"
+UNIT_DST="$SYSTEMD_DIR/starch-audio-port-watcher.service"
+
+mkdir -p "$PW_CONF_DIR" "$STARCH_DIR" "$SYSTEMD_DIR" "$BIN_DIR"
+
+if ! command -v pactl >/dev/null 2>&1; then
+    err "pactl not found. Install pipewire-pulse / pulseaudio-utils."
+    exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+    err "jq not found. Install jq."
+    exit 1
+fi
+
+# Defensive ALSA mixer fix-ups. On Realtek HDA codecs (e.g. ALC287), some
+# controls silently gate the physical analog output even when Master /
+# Speaker / PCM look fine — most commonly 'Line Out' at 0% and
+# 'Auto-Mute Mode' disabled. We re-assert sane values every run; amixer
+# does not require root since the gaming user is in the audio group.
+fix_alsa_levels() {
+    local card_idx ctl
+    for card_idx in $(awk '/^ [0-9]+ \[/ {gsub(/[\[\]]/,""); print $1}' /proc/asound/cards 2>/dev/null); do
+        # If this card has no analog output controls, skip silently.
+        amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'Line Out'" || continue
+        # Bump anything that's at zero on a powered analog output.
+        for ctl in 'Line Out' 'Speaker' 'Headphone' 'PCM' 'Master'; do
+            amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'$ctl'" || continue
+            # Only touch volume controls (skip pure switches).
+            local cur
+            cur=$(amixer -c "$card_idx" sget "$ctl" 2>/dev/null \
+                | awk '/Playback [0-9]+ \[/ {gsub(/[\[\]%]/,""); for(i=1;i<=NF;i++) if($i~/^[0-9]+$/) {print $i; exit}}')
+            if [ -n "$cur" ] && [ "$cur" -lt 5 ]; then
+                amixer -c "$card_idx" sset "$ctl" 80% unmute >/dev/null 2>&1 || true
+            fi
+            # Always unmute switches (idempotent).
+            amixer -c "$card_idx" sset "$ctl" unmute >/dev/null 2>&1 || true
+        done
+        # Auto-Mute Mode lets the codec route between speakers/headphones on plug.
+        amixer -c "$card_idx" sset 'Auto-Mute Mode' 'Enabled' >/dev/null 2>&1 || true
+    done
+}
+
+fix_alsa_levels
+
+# Slugify a string into a node-name-safe token.
+slug() { echo "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//'; }
+
+# Parse `pactl -f json list cards` into TSV records of:
+#   card<TAB>port<TAB>port_type<TAB>availability<TAB>port_description<TAB>profile<TAB>sink_name
+# One line per output port. The chosen profile is the highest-priority
+# stereo profile that includes the port; the predicted sink_name follows
+# the PipeWire ALSA naming convention (alsa_output.<card-suffix>.<profile-suffix>).
+parse_cards() {
+    pactl -f json list cards | jq -r '
+        .[] as $card
+        | ($card.name | sub("^alsa_card\\."; "")) as $card_suf
+        | $card.ports | to_entries[]
+        | .key as $port
+        | .value as $p
+        | select($p.type == "Speaker" or $p.type == "Headphones" or $p.type == "HDMI" or $p.type == "Line")
+        | ($p.availability
+            | if . == "available" then "yes"
+              elif . == "not available" then "no"
+              else "unknown" end) as $avail
+        | ( [ $p.profiles[]
+              | select(. != "off")
+              | select(contains("surround") | not)
+              | . as $pname
+              | ($card.profiles[$pname]) as $pinfo
+              | select($pinfo != null)
+              | { name: $pname,
+                  prio: ($pinfo.priority + (if $pinfo.available then 0 else -100000 end)) }
+            ] | max_by(.prio) ) as $chosen
+        | select($chosen != null)
+        | ($chosen.name
+            | sub("^output:"; "")
+            | sub("\\+input:[^+]*$"; "")
+            | sub("^input:"; "")) as $prof_suf
+        | [$card.name, $port, $p.type, $avail, $p.description,
+           $chosen.name, "alsa_output." + $card_suf + "." + $prof_suf]
+        | @tsv
+    '
+}
+
+PORTS=$(parse_cards)
+
+if [ -z "$PORTS" ]; then
+    err "No output ports discovered."
+    exit 1
+fi
+
+green "Discovered output ports:"
+printf '%s\n' "$PORTS" | while IFS=$'\t' read -r card port type avail desc profile sink; do
+    printf '  • %-22s [%s, avail=%s]\n    card=%s profile=%s sink=%s\n' \
+        "$desc" "$type" "$avail" "$card" "$profile" "$sink"
+done
+
+# Decide which ports to expose. We can only safely create a loopback
+# whose target ALSA sink currently exists — otherwise WirePlumber will
+# "rescue" the loopback's playback stream onto the default sink and
+# create feedback into the speakers/headphones. So we filter to existing
+# sinks. For HDMI, this means re-running this script after plugging in
+# a display (the profile activates and the sink materializes).
+EXISTING_SINKS=$(pactl list short sinks | awk '{print $2}')
+
+SELECTED_FILE=$(mktemp)
+trap 'rm -f "$SELECTED_FILE"' EXIT
+SKIPPED=""
+while IFS=$'\t' read -r card port type avail desc profile sink; do
+    [ -z "$card" ] && continue
+    if ! grep -qx "$sink" <<< "$EXISTING_SINKS"; then
+        if [ "$INCLUDE_PHANTOM" -eq 0 ]; then
+            SKIPPED="$SKIPPED  • $desc — underlying sink '$sink' not present (plug in device, then re-run)\n"
+            continue
+        fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$card" "$port" "$type" "$avail" "$desc" "$profile" "$sink" >> "$SELECTED_FILE"
+done <<< "$PORTS"
+
+if [ -n "$SKIPPED" ]; then
+    warn "Skipped (no underlying sink yet):"
+    printf '%b' "$SKIPPED"
+fi
+
+if [ ! -s "$SELECTED_FILE" ]; then
+    err "No usable output ports."
+    exit 1
+fi
+
+# Generate the PipeWire config (virtual sinks + loopbacks).
+PREV_HASH=""
+[ -r "$PW_CONF" ] && PREV_HASH=$(sha256sum "$PW_CONF" | awk '{print $1}')
+{
+    echo "# Managed by starch-audio-setup. Do not edit by hand."
+    echo "# Re-run scripts/starch-audio-setup to regenerate."
+    echo
+    echo "context.modules = ["
+    while IFS=$'\t' read -r card port type avail desc profile sink; do
+        slug=$(slug "$desc")
+        node_name="starch-out-$slug"
+        cat <<EOF
+    { name = libpipewire-module-loopback
+        args = {
+            node.description = "$desc"
+            capture.props = {
+                node.name        = "$node_name"
+                media.class      = "Audio/Sink"
+                audio.position   = [ FL FR ]
+                device.icon-name = "audio-card"
+            }
+            playback.props = {
+                node.name          = "$node_name.playback"
+                node.autoconnect   = false
+                node.dont-reconnect = true
+                audio.position     = [ FL FR ]
+            }
+        }
+    }
+EOF
+    done < "$SELECTED_FILE"
+    echo "]"
+} > "$PW_CONF"
+
+# Write metadata for the watcher.
+{
+    echo "# Managed by starch-audio-setup. Do not edit by hand."
+    echo "# Format: node_name<TAB>card<TAB>profile<TAB>port<TAB>target_sink"
+    while IFS=$'\t' read -r card port type avail desc profile sink; do
+        slug=$(slug "$desc")
+        printf 'starch-out-%s\t%s\t%s\t%s\t%s\n' "$slug" "$card" "$profile" "$port" "$sink"
+    done < "$SELECTED_FILE"
+} > "$META"
+
+# Install watcher binary + systemd unit (copy from repo).
+if [ ! -x "$WATCHER_SRC" ]; then
+    err "watcher script not found at $WATCHER_SRC"
+    exit 1
+fi
+install -Dm755 "$WATCHER_SRC" "$WATCHER_DST"
+install -Dm644 "$UNIT_SRC" "$UNIT_DST"
+
+systemctl --user daemon-reload
+systemctl --user enable --now starch-audio-port-watcher.service >/dev/null
+
+NEW_HASH=$(sha256sum "$PW_CONF" | awk '{print $1}')
+
+if [ "$PREV_HASH" != "$NEW_HASH" ]; then
+    # Wipe persisted volumes/routing state from previous (potentially-buggy)
+    # generations so virtual sinks don't inherit attenuated levels.
+    rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/"*restore-stream* 2>/dev/null || true
+    # Reload PipeWire to pick up the new conf.
+    systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
+    green "PipeWire config changed → restarted pipewire/wireplumber."
+else
+    green "PipeWire config unchanged — skipping restart."
+fi
+
+# Wait for the virtual sinks to come back, then force them to unity volume.
+for _ in $(seq 1 10); do
+    if pactl list short sinks | grep -q starch-out-; then break; fi
+    sleep 0.3
+done
+while IFS=$'\t' read -r card port type avail desc profile sink; do
+    slug=$(slug "$desc")
+    pactl set-sink-volume "starch-out-$slug" 100% 2>/dev/null || true
+    pactl set-sink-mute "starch-out-$slug" 0 2>/dev/null || true
+    # Explicitly link the loopback's playback stream to the target sink.
+    pw-link "starch-out-$slug.playback:output_FL" "$sink:playback_FL" 2>/dev/null || true
+    pw-link "starch-out-$slug.playback:output_FR" "$sink:playback_FR" 2>/dev/null || true
+done < "$SELECTED_FILE"
+
+green "Wrote $PW_CONF"
+green "Wrote $META"
+green "Installed $WATCHER_DST and systemd user unit"
+green "Done. Open Steam → Settings → Audio; you should see each port as a selectable output."
+green "Tip: install pavucontrol for a GUI port selector."

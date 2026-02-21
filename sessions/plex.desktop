@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Plex
+Comment=Plex HTPC session via gamescope with adaptive sync
+Exec=/usr/local/bin/start-plex
+Type=Application

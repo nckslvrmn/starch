@@ -1,0 +1,629 @@
+#!/bin/bash
+set -euo pipefail
+
+info()  { echo -e "\e[32m[starch]\e[0m $*"; }
+warn()  { echo -e "\e[33m[starch]\e[0m WARNING: $*"; }
+error() { echo -e "\e[31m[starch]\e[0m ERROR: $*" >&2; }
+step()  { echo ""; echo -e "\e[1m--- $* ---\e[0m"; }
+
+if [ "$(id -u)" -ne 0 ]; then
+    error "Run this script as root: sudo bash install.sh"
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -z "${GAMING_USER:-}" ]; then
+    GAMING_USER="${SUDO_USER:-}"
+fi
+
+if [ -z "${GAMING_USER:-}" ]; then
+    read -rp "Username to configure for gaming: " GAMING_USER
+fi
+
+if ! id "$GAMING_USER" &>/dev/null; then
+    error "User '$GAMING_USER' does not exist."
+    exit 1
+fi
+
+if ! sudo -u "$GAMING_USER" -H which paru &>/dev/null; then
+    error "paru not found for user $GAMING_USER."
+    error "Install paru first, then re-run this script:"
+    error "  https://github.com/morganamilo/paru#installation"
+    exit 1
+fi
+
+info "Installing starch gaming session for user: $GAMING_USER"
+
+detect_profile() {
+    if ! command -v lspci >/dev/null 2>&1; then
+        echo "nvidia"; return
+    fi
+    local gpus has_intel has_nvidia has_amd
+    gpus=$(lspci -nn | grep -Ei 'VGA|3D|Display')
+    has_intel=$(echo "$gpus"  | grep -c '\[8086:' || true)
+    has_nvidia=$(echo "$gpus" | grep -c '\[10de:' || true)
+    has_amd=$(echo "$gpus"    | grep -c '\[1002:' || true)
+    if [ "$has_intel" -gt 0 ] && [ "$has_nvidia" -gt 0 ]; then
+        echo "optimus"
+    elif [ "$has_nvidia" -gt 0 ]; then
+        echo "nvidia"
+    elif [ "$has_amd" -gt 0 ]; then
+        echo "amd"
+    else
+        echo "nvidia"
+    fi
+}
+
+if [ -n "${HW_PROFILE:-}" ]; then
+    case "$HW_PROFILE" in
+        discrete) HW_PROFILE="nvidia" ;;
+        nvidia|optimus|amd) ;;
+        *) error "Invalid HW_PROFILE='$HW_PROFILE' (expected nvidia | optimus | amd)"; exit 1 ;;
+    esac
+    info "Hardware profile (from HW_PROFILE env): $HW_PROFILE"
+else
+    HW_PROFILE="$(detect_profile)"
+    info "Hardware profile (auto-detected): $HW_PROFILE"
+fi
+
+step "Installing packages"
+
+PACKAGES=(
+    alsa-firmware
+    alsa-utils
+    bluez
+    bluez-utils
+    brightnessctl
+    bubblewrap
+    cage
+    dolphin-emu
+    flatpak
+    foot
+    fuzzel
+    gamemode
+    gamescope
+    jack2
+    jq
+    lib32-gamemode
+    lib32-mangohud
+    lib32-mesa
+    lib32-pipewire
+    lib32-vulkan-icd-loader
+    libdrm
+    libnewt
+    libpulse
+    mangohud
+    networkmanager
+    pavucontrol
+    pipewire
+    pipewire-alsa
+    pipewire-pulse
+    qt6-svg
+    qt6-wayland
+    sddm
+    sof-firmware
+    steam
+    vulkan-icd-loader
+    wireplumber
+    wl-clipboard
+    wlr-randr
+    xdg-desktop-portal-gtk
+    xdg-desktop-portal-wlr
+    xorg-xwayland
+    xpadneo-dkms
+)
+
+case "$HW_PROFILE" in
+    nvidia)
+        PACKAGES+=(lib32-nvidia-utils)
+        ;;
+    optimus)
+        PACKAGES+=(
+            lib32-nvidia-utils
+            mesa
+            vulkan-intel
+            lib32-vulkan-intel
+            intel-media-driver
+            libva-utils
+        )
+        ;;
+    amd)
+        PACKAGES+=(
+            mesa
+            vulkan-radeon
+            lib32-vulkan-radeon
+            libva-mesa-driver
+            lib32-libva-mesa-driver
+            libva-utils
+        )
+        ;;
+esac
+
+MISSING=()
+for pkg in "${PACKAGES[@]}"; do
+    pacman -Qi "$pkg" &>/dev/null || MISSING+=("$pkg")
+done
+
+PACKAGES_NEWLY_INSTALLED=false
+if [ ${#MISSING[@]} -gt 0 ]; then
+    info "Installing ${#MISSING[@]} missing package(s): ${MISSING[*]}"
+    sudo -u "$GAMING_USER" -H paru -S --needed --noconfirm --skipreview "${MISSING[@]}"
+    PACKAGES_NEWLY_INSTALLED=true
+    info "Packages installed."
+else
+    info "All packages already present, skipping installation."
+fi
+
+step "Deploying /etc configuration"
+
+install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/gcadapter.conf" \
+    /etc/modprobe.d/starch-gcadapter.conf
+info "  /etc/modprobe.d/starch-gcadapter.conf"
+
+case "$HW_PROFILE" in
+    optimus)
+        MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/nvidia-optimus.conf"
+        MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia-optimus.conf"
+        MODPROBE_DST="/etc/modprobe.d/starch-nvidia.conf"
+        MKINIT_DST="/etc/mkinitcpio.conf.d/starch-nvidia.conf"
+        STALE_MODPROBE="/etc/modprobe.d/starch-amdgpu.conf"
+        STALE_MKINIT="/etc/mkinitcpio.conf.d/starch-amdgpu.conf"
+        ;;
+    nvidia)
+        MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/nvidia.conf"
+        MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf"
+        MODPROBE_DST="/etc/modprobe.d/starch-nvidia.conf"
+        MKINIT_DST="/etc/mkinitcpio.conf.d/starch-nvidia.conf"
+        STALE_MODPROBE="/etc/modprobe.d/starch-amdgpu.conf"
+        STALE_MKINIT="/etc/mkinitcpio.conf.d/starch-amdgpu.conf"
+        ;;
+    amd)
+        MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/amdgpu.conf"
+        MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/amdgpu.conf"
+        MODPROBE_DST="/etc/modprobe.d/starch-amdgpu.conf"
+        MKINIT_DST="/etc/mkinitcpio.conf.d/starch-amdgpu.conf"
+        STALE_MODPROBE="/etc/modprobe.d/starch-nvidia.conf"
+        STALE_MKINIT="/etc/mkinitcpio.conf.d/starch-nvidia.conf"
+        ;;
+esac
+
+STARCH_FORCE_INITRAMFS=0
+for stale in "$STALE_MODPROBE" "$STALE_MKINIT"; do
+    if [ -e "$stale" ]; then
+        rm -f "$stale"
+        info "  Removed stale $stale (profile switched)"
+        STARCH_FORCE_INITRAMFS=1
+    fi
+done
+
+install -Dm644 "$MODPROBE_SRC" "$MODPROBE_DST"
+info "  $MODPROBE_DST ($HW_PROFILE)"
+
+if ! cmp -s "$MKINIT_SRC" "$MKINIT_DST" 2>/dev/null; then
+    STARCH_FORCE_INITRAMFS=1
+fi
+install -Dm644 "$MKINIT_SRC" "$MKINIT_DST"
+info "  $MKINIT_DST ($HW_PROFILE)"
+
+install -d -m755 /etc/starch
+# Preserve any user-set STARCH_REFRESH_FALLBACK across re-installs.
+EXISTING_REFRESH=""
+if [ -r /etc/starch/profile.conf ]; then
+    # shellcheck disable=SC1091
+    EXISTING_REFRESH=$(. /etc/starch/profile.conf 2>/dev/null; echo "${STARCH_REFRESH_FALLBACK:-}")
+fi
+cat > /etc/starch/profile.conf <<EOF
+STARCH_PROFILE=$HW_PROFILE
+# Optional fallback refresh rate (Hz) used when modetest probing fails.
+# Set this to your panel's native rate (e.g. 165) so a tooling regression
+# never silently drops you to 60Hz.
+STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH}
+EOF
+info "  /etc/starch/profile.conf (STARCH_PROFILE=$HW_PROFILE, STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH:-<unset>})"
+
+install -d -m755 /var/lib/starch
+info "  /var/lib/starch/"
+
+install -Dm644 "$SCRIPT_DIR/etc/udev/rules.d/70-gaming.conf" \
+    /etc/udev/rules.d/70-starch-gaming.rules
+info "  /etc/udev/rules.d/70-starch-gaming.rules"
+
+install -Dm644 "$SCRIPT_DIR/etc/sysctl.d/99-gaming.conf" \
+    /etc/sysctl.d/99-starch-gaming.conf
+info "  /etc/sysctl.d/99-starch-gaming.conf"
+
+case "$HW_PROFILE" in
+    amd) GAMEMODE_SRC="$SCRIPT_DIR/etc/gamemode-amd.ini" ;;
+    *)   GAMEMODE_SRC="$SCRIPT_DIR/etc/gamemode-nvidia.ini" ;;
+esac
+install -Dm644 "$GAMEMODE_SRC" /etc/gamemode.ini
+info "  /etc/gamemode.ini ($HW_PROFILE)"
+
+install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/iwd-backend.conf" \
+    /etc/NetworkManager/conf.d/iwd-backend.conf
+info "  /etc/NetworkManager/conf.d/iwd-backend.conf"
+install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/starch.conf" \
+    /etc/NetworkManager/conf.d/starch.conf
+info "  /etc/NetworkManager/conf.d/starch.conf"
+
+sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.conf" \
+    | install -Dm644 /dev/stdin /etc/sddm.conf.d/10-wayland.conf
+info "  /etc/sddm.conf.d/10-wayland.conf (DefaultUser=$GAMING_USER)"
+
+# Clean up the previous weston-based greeter config if upgrading.
+for stale in /etc/sddm/weston.ini; do
+    [ -e "$stale" ] && rm -f "$stale" && info "  Removed stale $stale"
+done
+
+# Wipe stale theme files so removed assets don't linger and confuse the greeter.
+rm -rf /usr/share/sddm/themes/starch
+find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
+    dst="/usr/share/sddm/themes/starch/${src#"$SCRIPT_DIR"/etc/sddm/themes/starch/}"
+    install -Dm644 "$src" "$dst"
+    info "  $dst"
+done
+
+step "Installing session scripts"
+
+install -Dm644 "$SCRIPT_DIR/scripts/starch-profile.sh" \
+    /usr/local/lib/starch/profile.sh
+info "  /usr/local/lib/starch/profile.sh"
+
+install -Dm755 "$SCRIPT_DIR/scripts/start-steam" \
+    /usr/local/bin/start-steam
+info "  /usr/local/bin/start-steam"
+
+install -Dm755 "$SCRIPT_DIR/scripts/start-river" \
+    /usr/local/bin/start-river
+info "  /usr/local/bin/start-river"
+
+install -Dm755 "$SCRIPT_DIR/scripts/start-plex" \
+    /usr/local/bin/start-plex
+info "  /usr/local/bin/start-plex"
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-select-display" \
+    /usr/local/bin/starch-select-display
+info "  /usr/local/bin/starch-select-display"
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-steam-launch" \
+    /usr/local/bin/starch-steam-launch
+info "  /usr/local/bin/starch-steam-launch"
+
+install -Dm644 "$SCRIPT_DIR/etc/starch/os-release.steamos" \
+    /etc/starch/os-release.steamos
+info "  /etc/starch/os-release.steamos"
+
+# Failsafe session was removed — clean up any prior install.
+for stale in /usr/local/bin/start-failsafe /usr/share/wayland-sessions/failsafe.desktop; do
+    [ -e "$stale" ] && rm -f "$stale" && info "  Removed stale $stale"
+done
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-doctor" \
+    /usr/local/bin/starch-doctor
+info "  /usr/local/bin/starch-doctor"
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-audio-setup" \
+    /usr/local/bin/starch-audio-setup
+info "  /usr/local/bin/starch-audio-setup"
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-audio-port-watcher" \
+    /usr/local/bin/starch-audio-port-watcher
+info "  /usr/local/bin/starch-audio-port-watcher"
+
+# System-wide user oneshot — runs starch-audio-setup once per login so
+# every gaming user gets per-port virtual sinks generated against their
+# current hardware state (HDMI ports come and go with display plug state).
+# starch-audio-setup is idempotent and skips the pipewire restart when
+# the generated config has not changed.
+cat > /etc/systemd/user/starch-audio-setup.service <<'EOF'
+[Unit]
+Description=starch audio virtual-sink setup
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+ConditionPathExists=/usr/local/bin/starch-audio-setup
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 2
+ExecStart=/usr/local/bin/starch-audio-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
+EOF
+info "  /etc/systemd/user/starch-audio-setup.service"
+
+systemctl --global enable starch-audio-setup.service >/dev/null 2>&1 || true
+info "  enabled (global) starch-audio-setup.service"
+
+# Realtek HDA codecs frequently ship with 'Line Out' at 0% and
+# 'Auto-Mute Mode' disabled, which silently gates the analog output.
+# Fix every analog card we can see, then persist via alsactl so
+# alsa-restore.service brings it back across reboots.
+if command -v amixer >/dev/null 2>&1; then
+    for card_idx in $(awk '/^ [0-9]+ \[/ {gsub(/[\[\]]/,""); print $1}' /proc/asound/cards 2>/dev/null); do
+        amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'Line Out'" || continue
+        for ctl in 'Line Out' 'Speaker' 'Headphone' 'PCM' 'Master'; do
+            amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'$ctl'" || continue
+            amixer -c "$card_idx" sset "$ctl" 80% unmute >/dev/null 2>&1 || true
+        done
+        amixer -c "$card_idx" sset 'Auto-Mute Mode' 'Enabled' >/dev/null 2>&1 || true
+    done
+    if command -v alsactl >/dev/null 2>&1; then
+        alsactl store >/dev/null 2>&1 \
+            && info "  ALSA mixer levels persisted (Line Out, Auto-Mute, etc.)" \
+            || warn "  alsactl store failed — Line Out may not survive reboot"
+    fi
+fi
+
+if [ "$HW_PROFILE" != "amd" ]; then
+    install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
+        /usr/local/bin/nvidia-flatpak-gl-sync
+    info "  /usr/local/bin/nvidia-flatpak-gl-sync"
+
+    install -Dm644 "$SCRIPT_DIR/etc/pacman.d/hooks/nvidia-flatpak-gl.hook" \
+        /etc/pacman.d/hooks/nvidia-flatpak-gl.hook
+    info "  /etc/pacman.d/hooks/nvidia-flatpak-gl.hook"
+else
+    for f in /usr/local/bin/nvidia-flatpak-gl-sync \
+             /etc/pacman.d/hooks/nvidia-flatpak-gl.hook; do
+        if [ -e "$f" ]; then
+            rm -f "$f"
+            info "  Removed $f (amd profile)"
+        fi
+    done
+fi
+
+install -Dm755 "$SCRIPT_DIR/scripts/steamos-session-select" \
+    /usr/bin/steamos-session-select
+info "  /usr/bin/steamos-session-select"
+
+step "Configuring Flatpak and installing Plex HTPC"
+
+flatpak remote-add --system --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo
+info "  Flathub remote present"
+
+if flatpak info --system tv.plex.PlexHTPC &>/dev/null; then
+    info "  tv.plex.PlexHTPC already installed, skipping"
+else
+    flatpak install --system --noninteractive flathub tv.plex.PlexHTPC
+    info "  tv.plex.PlexHTPC installed"
+fi
+
+if [ "$HW_PROFILE" != "amd" ]; then
+    RAW_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
+    if [ -n "$RAW_VER" ]; then
+        NVIDIA_EXT="org.freedesktop.Platform.GL.nvidia-$(echo "$RAW_VER" | tr '.' '-')"
+        if flatpak info --system "$NVIDIA_EXT" &>/dev/null; then
+            info "  $NVIDIA_EXT already installed, skipping"
+        else
+            flatpak install --system --noninteractive flathub "$NVIDIA_EXT" \
+                && info "  $NVIDIA_EXT installed" \
+                || warn "  Could not install $NVIDIA_EXT — Plex GPU acceleration may not work"
+        fi
+        NVIDIA_EXT32="${NVIDIA_EXT/GL.nvidia/GL32.nvidia}"
+        if flatpak info --system "$NVIDIA_EXT32" &>/dev/null; then
+            info "  $NVIDIA_EXT32 already installed, skipping"
+        else
+            flatpak install --system --noninteractive flathub "$NVIDIA_EXT32" \
+                && info "  $NVIDIA_EXT32 installed" \
+                || warn "  Could not install $NVIDIA_EXT32 (non-fatal)"
+        fi
+    else
+        warn "  Could not detect NVIDIA driver version — skipping flatpak GL extension install"
+        warn "  Manually run: flatpak install flathub org.freedesktop.Platform.GL.nvidia-<major-minor>"
+    fi
+else
+    info "  amd profile: using the default Mesa GL runtime (no NVIDIA extension needed)"
+fi
+
+step "Installing SteamOS compatibility helpers"
+
+STEAMOS_GUIDE_REPO="/tmp/steam-using-gamescope-guide"
+if [ -d "$STEAMOS_GUIDE_REPO" ]; then
+    (cd "$STEAMOS_GUIDE_REPO" && git pull -q origin main 2>/dev/null) || true
+else
+    git clone -q https://github.com/shahnawazshahin/steam-using-gamescope-guide.git "$STEAMOS_GUIDE_REPO" 2>/dev/null || {
+        warn "Could not clone steamos helper scripts from GitHub. Skipping optional helpers."
+        STEAMOS_GUIDE_REPO=""
+    }
+fi
+
+if [ -n "$STEAMOS_GUIDE_REPO" ] && [ -d "$STEAMOS_GUIDE_REPO/usr/bin" ]; then
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-update" \
+        /usr/local/bin/steamos-update
+    info "  /usr/local/bin/steamos-update"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/jupiter-biosupdate" \
+        /usr/local/bin/jupiter-biosupdate
+    info "  /usr/local/bin/jupiter-biosupdate"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-polkit-helpers/steamos-update" \
+        /usr/local/bin/steamos-polkit-helpers/steamos-update
+    info "  /usr/local/bin/steamos-polkit-helpers/steamos-update"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-polkit-helpers/jupiter-biosupdate" \
+        /usr/local/bin/steamos-polkit-helpers/jupiter-biosupdate
+    info "  /usr/local/bin/steamos-polkit-helpers/jupiter-biosupdate"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-polkit-helpers/steamos-set-timezone" \
+        /usr/local/bin/steamos-polkit-helpers/steamos-set-timezone
+    info "  /usr/local/bin/steamos-polkit-helpers/steamos-set-timezone"
+else
+    warn "SteamOS helper scripts not available. These are optional but recommended."
+fi
+
+step "Installing Wayland session descriptors"
+
+install -Dm644 "$SCRIPT_DIR/sessions/steam.desktop" \
+    /usr/share/wayland-sessions/steam.desktop
+info "  /usr/share/wayland-sessions/steam.desktop"
+
+install -Dm644 "$SCRIPT_DIR/sessions/river.desktop" \
+    /usr/share/wayland-sessions/river.desktop
+info "  /usr/share/wayland-sessions/river.desktop (overwritten)"
+
+install -Dm644 "$SCRIPT_DIR/sessions/plex.desktop" \
+    /usr/share/wayland-sessions/plex.desktop
+info "  /usr/share/wayland-sessions/plex.desktop"
+
+step "Installing River configuration for $GAMING_USER"
+
+GAMING_HOME=$(eval echo ~"$GAMING_USER")
+GAMING_GROUP=$(id -gn "$GAMING_USER")
+
+for _dir in \
+    "$GAMING_HOME/.config/river" \
+    "$GAMING_HOME/.config/xdg-desktop-portal" \
+    "$GAMING_HOME/.local/share"; do
+    install -dm755 -o "$GAMING_USER" -g "$GAMING_GROUP" "$_dir"
+done
+
+install -Dm755 "$SCRIPT_DIR/config/river/init" \
+    "$GAMING_HOME/.config/river/init"
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/river/init"
+info "  $GAMING_HOME/.config/river/init"
+
+install -Dm644 "$SCRIPT_DIR/config/brave-flags.conf" \
+    "$GAMING_HOME/.config/brave-flags.conf"
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/brave-flags.conf"
+info "  $GAMING_HOME/.config/brave-flags.conf"
+
+install -Dm644 "$SCRIPT_DIR/config/xdg-desktop-portal/portals.conf" \
+    "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
+info "  $GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
+
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config" "$GAMING_HOME/.local" "$GAMING_HOME/.local/share" 2>/dev/null || true
+
+step "Configuring user groups for $GAMING_USER"
+
+for group in input video audio seat gamemode lp; do
+    if getent group "$group" &>/dev/null; then
+        usermod -aG "$group" "$GAMING_USER"
+        info "  Added $GAMING_USER to group: $group"
+    else
+        warn "  Group '$group' does not exist — skipping. (install relevant packages?)"
+    fi
+done
+
+step "Enabling services"
+
+systemctl enable sddm.service
+info "  sddm.service enabled"
+
+if ! systemctl is-enabled NetworkManager.service &>/dev/null; then
+    systemctl enable NetworkManager.service
+    info "  NetworkManager.service enabled"
+else
+    info "  NetworkManager.service already enabled"
+fi
+
+if systemctl list-unit-files --quiet bluetooth.service 2>/dev/null | grep -q bluetooth; then
+    systemctl enable bluetooth.service
+    info "  bluetooth.service enabled"
+fi
+
+if [ "$HW_PROFILE" != "amd" ]; then
+    for svc in nvidia-suspend nvidia-hibernate nvidia-resume nvidia-powerd; do
+        if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
+            systemctl enable "${svc}.service"
+            info "  Enabled: ${svc}.service"
+        else
+            warn "  ${svc}.service not found — install nvidia-utils if not present"
+        fi
+    done
+else
+    info "  amd profile: skipping nvidia-* power-management services"
+fi
+
+step "Configuring uinput module"
+
+modprobe uinput 2>/dev/null && info "  uinput loaded" || warn "  uinput already loaded or unavailable"
+
+cat > /etc/modules-load.d/starch-uinput.conf << 'EOF'
+uinput
+EOF
+info "  /etc/modules-load.d/starch-uinput.conf"
+
+udevadm control --reload-rules
+udevadm trigger
+info "  udev rules reloaded"
+
+step "Applying sysctl settings"
+sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
+
+if [ "$PACKAGES_NEWLY_INSTALLED" = "true" ] || [ "${STARCH_FORCE_INITRAMFS:-0}" = "1" ]; then
+    step "Rebuilding initramfs"
+    info "  Running mkinitcpio -P (this will take a moment)..."
+    mkinitcpio -P
+    info "  Initramfs rebuilt."
+else
+    info "Skipping initramfs rebuild (no new packages installed)"
+fi
+
+echo ""
+echo "================================================================"
+info "starch installation complete!"
+echo "================================================================"
+echo ""
+echo "  Hardware profile: $HW_PROFILE"
+case "$HW_PROFILE" in
+    optimus)
+        echo "    BIOS: leave graphics set to 'Hybrid / Optimus' (NOT Discrete only)."
+        echo "    Intel iGPU drives displays; NVIDIA handles PRIME render offload."
+        ;;
+    nvidia)
+        echo "    BIOS: set graphics to 'Discrete GPU Only' if available."
+        ;;
+    amd)
+        echo "    amdgpu drives both scanout and rendering. No NVIDIA stack involved."
+        ;;
+esac
+echo ""
+
+if [ "$HW_PROFILE" != "amd" ]; then
+    echo "  Before rebooting, verify your bootloader kernel cmdline contains:"
+    echo "    nvidia_drm.modeset=1"
+    if ! grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
+        if [ "${STARCH_SKIP_CMDLINE_CHECK:-0}" = "1" ]; then
+            warn "  Current /proc/cmdline is missing nvidia_drm.modeset=1 (skipped via STARCH_SKIP_CMDLINE_CHECK=1)"
+        else
+            error "  Current /proc/cmdline is missing nvidia_drm.modeset=1."
+            error "  Without it, Wayland sessions and NVIDIA suspend will silently break on reboot."
+            error "  Add 'nvidia_drm.modeset=1' to your bootloader kernel parameters and re-run."
+            error "  Override with STARCH_SKIP_CMDLINE_CHECK=1 if you've already updated the bootloader."
+            exit 1
+        fi
+    fi
+    echo ""
+fi
+echo "  REBOOT to apply:"
+echo "    - Early module loading (mkinitcpio change)"
+echo "    - Group membership changes for $GAMING_USER"
+echo ""
+echo "  After rebooting:"
+echo "    1. Select 'Steam', 'Plex', or 'Desktop' from SDDM"
+echo "    2. Allow Steam to update on first launch (Steam session only)"
+echo "    3. In Steam Settings > Compatibility:"
+echo "         Enable 'Steam Play for all titles'"
+echo "         Select Proton Experimental or latest stable"
+echo "    4. In Steam Settings > Controller:"
+echo "         Enable controller configuration support"
+echo ""
+echo "  Pick which display is primary (internal eDP vs external HDMI/DP):"
+echo "    starch-select-display            # interactive TUI"
+echo "    starch-select-display external   # or pass directly"
+echo "    starch-select-display --show     # show current preference"
+echo ""
+echo "  Switch to Desktop from Steam's power menu returns to SDDM."
+echo ""
+echo "  If you need to troubleshoot:"
+echo "    - Run 'starch-doctor' for a preflight check of every common breakage"
+echo "    - Drop to a TTY (Ctrl+Alt+F2) if SDDM itself fails to come up"
+echo "    - Kernel logs:  dmesg | grep -i nvidia"
+echo "    - SDDM logs:    journalctl -u sddm -b"
+echo "    - Session logs: ~/.local/share/{steam,plex,river}-session.log"
+echo ""

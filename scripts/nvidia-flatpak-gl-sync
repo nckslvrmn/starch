@@ -1,0 +1,61 @@
+#!/bin/bash
+set -uo pipefail
+
+STAMP_DIR=/var/lib/starch
+STAMP=$STAMP_DIR/flatpak-gl.version
+
+DRIVER_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
+if [ -z "$DRIVER_VER" ]; then
+    echo "nvidia-flatpak-gl-sync: could not detect driver version, skipping"
+    exit 0
+fi
+
+EXT_VER=$(echo "$DRIVER_VER" | tr '.' '-')
+GL_EXT="org.freedesktop.Platform.GL.nvidia-${EXT_VER}"
+GL32_EXT="org.freedesktop.Platform.GL32.nvidia-${EXT_VER}"
+
+echo "nvidia-flatpak-gl-sync: driver ${DRIVER_VER} → installing ${GL_EXT}"
+
+# A real install failure (network down, flatpak daemon hung, missing
+# extension on flathub) must not be silently swallowed — Plex would then
+# fall back to software rendering with no warning.
+gl_ok=0
+
+if flatpak info --system "$GL_EXT" &>/dev/null; then
+    gl_ok=1
+elif timeout 120 flatpak install --system --noninteractive flathub "$GL_EXT"; then
+    echo "nvidia-flatpak-gl-sync: installed ${GL_EXT}"
+    gl_ok=1
+else
+    echo "nvidia-flatpak-gl-sync: ERROR installing ${GL_EXT} — Plex GPU accel will be broken" >&2
+fi
+
+if flatpak info --system "$GL32_EXT" &>/dev/null; then
+    :
+elif timeout 120 flatpak install --system --noninteractive flathub "$GL32_EXT"; then
+    echo "nvidia-flatpak-gl-sync: installed ${GL32_EXT}"
+else
+    echo "nvidia-flatpak-gl-sync: WARNING ${GL32_EXT} not installed (32-bit GL — non-fatal)" >&2
+fi
+
+# Remove stale extensions matching a different driver version.
+flatpak list --system --columns=application 2>/dev/null \
+    | grep -E 'org\.freedesktop\.Platform\.GL(32)?\.nvidia-' \
+    | while read -r ext; do
+        if [ "$ext" != "$GL_EXT" ] && [ "$ext" != "$GL32_EXT" ]; then
+            echo "nvidia-flatpak-gl-sync: removing stale extension ${ext}"
+            flatpak uninstall --system --noninteractive "$ext" 2>/dev/null || true
+        fi
+    done
+
+# Stamp only when the 64-bit GL extension is present — start-plex reads
+# this to detect driver/flatpak drift on the next session.
+if [ "$gl_ok" = "1" ]; then
+    install -d -m755 "$STAMP_DIR"
+    printf '%s\n' "$DRIVER_VER" > "$STAMP"
+    chmod 644 "$STAMP"
+    echo "nvidia-flatpak-gl-sync: stamped $STAMP = $DRIVER_VER"
+    exit 0
+fi
+
+exit 1
