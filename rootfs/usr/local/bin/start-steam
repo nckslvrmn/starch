@@ -1,0 +1,52 @@
+#!/bin/bash
+set -uo pipefail
+
+. /usr/local/lib/starch/profile.sh
+
+# Logging first, so profile-init failures (no NVIDIA card, etc.) land in the
+# session log instead of wherever SDDM points stderr.
+starch_session_begin steam
+
+# One-shot autologin cleanup: if we got here via a session handoff, drop the
+# autologin conf so the next boot shows the greeter again.
+starch-session-request clear 2>/dev/null || true
+
+starch_profile_init steam-session || exit 1
+starch_check_gpu_modules steam-session || exit 1
+starch_wait_for_drm steam-session || exit 1
+starch_apply_gpu_env
+
+export PROTON_ENABLE_NVAPI=1
+export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
+export STEAM_GAMESCOPE_SESSION=1
+
+XDG_RUNTIME_DIR=/run/user/$(id -u)
+export XDG_RUNTIME_DIR
+
+starch_ensure_audio steam-session
+
+# Session-scoped perf preset; STARCH_SESSION_PRE_END restores it in the EXIT trap.
+sudo -n /usr/local/bin/starch-perf-mode on >/dev/null 2>&1 || \
+    echo "[steam-session] WARNING: starch-perf-mode on failed (check sudoers drop-in)"
+STARCH_SESSION_PRE_END='sudo -n /usr/local/bin/starch-perf-mode off >/dev/null 2>&1 || true'
+
+# --rt needs gamescope to hold CAP_SYS_NICE (granted by install.sh + a pacman
+# hook), else it drops to normal priority. --hdr-enabled drives real HDR on the
+# Mini-LED panel; SDR games still direct-scanout with no penalty.
+GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled --mangoapp)
+
+REFRESH=$(starch_probe_refresh)
+[ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"
+
+# Priority list so gamescope prefers the external when docked, internal fallback.
+PREFER_OUTPUT="${STARCH_OUTPUT_PRIORITY:-${STARCH_PRIMARY_OUTPUT:-}}"
+[ -n "$PREFER_OUTPUT" ] && GAMESCOPE_ARGS+=(--prefer-output "$PREFER_OUTPUT")
+
+echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
+
+# No dbus-run-session here: SDDM's systemd user session already provides a
+# session bus ($XDG_RUNTIME_DIR/bus); nesting a second bus would cut Steam off
+# from user services and portals on the real one.
+starch_run_compositor steam-session -- \
+    gamescope "${GAMESCOPE_ARGS[@]}" -- \
+        starch-steam-launch steam -gamepadui -steamos3

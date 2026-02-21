@@ -1,0 +1,5 @@
+#!/bin/bash
+# Vendored from shahnawazshahin/steam-using-gamescope-guide, path fixed:
+# upstream exec'd /usr/bin/jupiter-biosupdate, which doesn't exist here.
+set -eu
+exec /usr/local/bin/jupiter-biosupdate

@@ -1,0 +1,83 @@
+#!/bin/bash
+# Root-side consumer of session-switch requests, driven by the
+# starch-session-handoff.path unit watching the request file.
+#
+# Why this exists: Steam's client runs inside a pressure-vessel container
+# that is PID-namespaced (host processes are invisible, so pgrep/pkill and
+# waiting on gamescope can't work) and nosuid (sudo/pkexec fail). The only
+# reliable channel out is the filesystem — steamos-session-select writes a
+# request file in $HOME, and this helper does the real work on the host:
+# write a one-shot SDDM autologin drop-in, tear the session down, restart
+# SDDM so autologin fires. Same mechanism SteamOS itself uses.
+set -uo pipefail
+
+REQ="@@GAMING_HOME@@/.local/state/starch/session-request"
+CONF=/etc/sddm.conf.d/zz-starch-autologin.conf
+
+log() { echo "starch-session-handoff: $*"; }
+
+[ -e "$REQ" ] || exit 0
+
+# Owner + regular-file checks: the file is user-writable and we run as root,
+# so refuse symlinks and anything not owned by the gaming user.
+if [ -L "$REQ" ] || [ ! -f "$REQ" ] \
+   || [ "$(stat -c %U "$REQ" 2>/dev/null)" != "@@GAMING_USER@@" ]; then
+    log "refusing request file (symlink or wrong owner)"
+    rm -f "$REQ"
+    exit 1
+fi
+
+target=$(head -c 64 "$REQ" | tr -cd 'a-z')
+rm -f "$REQ"
+
+case "$target" in
+    desktop|river)
+        session=starch-river.desktop ;;
+    steam)
+        session=steam.desktop ;;
+    clear)
+        # One-shot semantics: session starts request 'clear' so the greeter
+        # is back to normal afterwards. No SDDM restart for this.
+        rm -f "$CONF"
+        log "cleared one-shot autologin"
+        exit 0 ;;
+    *)
+        log "unknown target '$target' — ignoring"
+        exit 1 ;;
+esac
+
+log "handoff to $session requested"
+
+cat > "$CONF" <<EOF
+# One-shot autologin written by starch-session-handoff; the next session
+# start requests 'clear' which removes it. If you're reading this and didn't
+# just switch sessions, it's stale — delete it to get the greeter back.
+[Autologin]
+User=@@GAMING_USER@@
+Session=$session
+EOF
+
+# Graceful teardown first: ask Steam to exit via its own IPC (works from
+# root on behalf of the user), then give the compositor up to 10s to unwind.
+# gamescope --steam exits when Steam does; SIGTERMing gamescope first hangs.
+if pgrep -u "@@GAMING_USER@@" -x steam >/dev/null 2>&1; then
+    runuser -u "@@GAMING_USER@@" -- /usr/bin/steam -shutdown >/dev/null 2>&1 || true
+fi
+for _ in $(seq 1 100); do
+    pgrep -x gamescope >/dev/null 2>&1 || pgrep -x river >/dev/null 2>&1 || break
+    sleep 0.1
+done
+
+# Escalate if something survived — SIGKILL mid-DRM-handoff can wedge the GPU,
+# and the SDDM restart below recovers the display either way.
+if pgrep -x gamescope >/dev/null 2>&1; then
+    log "graceful shutdown timed out — killing gamescope/steam"
+    pkill -KILL -x gamescope 2>/dev/null || true
+    pkill -KILL -x steam 2>/dev/null || true
+    sleep 1
+fi
+
+# Required even after a clean exit: SDDM only evaluates [Autologin] when the
+# daemon (re)starts, not when a session ends.
+log "restarting sddm for autologin into $session"
+systemctl restart sddm.service

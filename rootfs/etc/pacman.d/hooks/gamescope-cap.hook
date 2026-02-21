@@ -1,0 +1,14 @@
+# gamescope's --rt (realtime scheduling) and nice -20 are gated on CAP_SYS_NICE;
+# without it gamescope logs "Performance will be affected" and runs the
+# compositor threads at normal priority. File caps are dropped on every package
+# upgrade, so reapply after gamescope is written.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/bin/gamescope
+
+[Action]
+Description = Granting gamescope CAP_SYS_NICE (realtime scheduling for the Steam session)...
+When = PostTransaction
+Exec = /usr/bin/setcap cap_sys_nice=eip /usr/bin/gamescope

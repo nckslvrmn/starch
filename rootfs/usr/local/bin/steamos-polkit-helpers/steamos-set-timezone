@@ -1,0 +1,4 @@
+#!/bin/bash
+# Vendored from shahnawazshahin/steam-using-gamescope-guide. Timezone is
+# managed by the OS (timedatectl), not by Steam.
+exit 0

@@ -1,0 +1,47 @@
+# Uninstalling starch
+
+starch is a config layer, not a distro — removal is deleting the files it
+installed and re-enabling whatever you want instead. The repo layout *is* the
+manifest: everything under `rootfs/` maps to `/`, everything under `userfs/`
+maps to the gaming user's home.
+
+## Remove installed files
+
+From the repo checkout, as root:
+
+```bash
+# System files (rootfs/ mirrors /)
+(cd rootfs && find . -type f | sed 's|^\.||') | xargs -r rm -f
+
+# Generated at install time (not in rootfs/)
+rm -f /etc/starch/profile.conf /etc/resolv.conf
+rm -rf /etc/starch /var/lib/starch /usr/share/sddm/themes/starch
+
+# Per-user files (userfs/ mirrors ~)
+(cd userfs && find . -type f | sed "s|^\.|$HOME|") | xargs -r rm -f
+
+# Opt-in virtual-sink artifacts, if starch-audio-setup was ever run
+rm -f ~/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf \
+      ~/.config/starch/audio-sinks.conf
+```
+
+Restore `/etc/resolv.conf` for your replacement DNS setup afterwards.
+
+## Services
+
+```bash
+systemctl disable sddm iwd systemd-networkd systemd-resolved systemd-oomd
+systemctl --global disable starch-audio-setup starch-audio-port-watcher 2>/dev/null
+```
+
+(Keep `NetworkManager` or re-point it at full management by deleting the
+`NetworkManager/conf.d` files above first.)
+
+## Caps and groups
+
+```bash
+setcap -r /usr/bin/gamescope
+gpasswd -d <user> input   # and video/audio/seat/lp if unwanted
+```
+
+Packages are left installed — remove with pacman/paru as desired.

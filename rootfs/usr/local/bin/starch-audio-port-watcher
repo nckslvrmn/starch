@@ -1,0 +1,71 @@
+#!/bin/bash
+# Watches default-sink changes; when a starch virtual sink becomes default,
+# flips the underlying card's profile and port so audio comes out the
+# chosen physical jack.
+set -u
+
+META="${XDG_CONFIG_HOME:-$HOME/.config}/starch/audio-sinks.conf"
+
+if [ ! -r "$META" ]; then
+    echo "starch-audio-port-watcher: no metadata at $META; run starch-audio-setup first." >&2
+    exit 1
+fi
+
+log() { printf '[starch-audio] %s\n' "$*"; }
+
+# Force loopback links explicitly — WirePlumber's auto-routing cross-links
+# virtual sinks to each other when several are in the graph.
+ensure_links() {
+    local node card profile port target
+    while IFS=$'\t' read -r node card profile port target; do
+        case "$node" in ''|\#*) continue ;; esac
+        pactl list short sinks | awk '{print $2}' | grep -qx "$target" || continue
+        pw-link "$node.playback:output_FL" "$target:playback_FL" 2>/dev/null || true
+        pw-link "$node.playback:output_FR" "$target:playback_FR" 2>/dev/null || true
+    done < "$META"
+}
+
+apply_for_sink() {
+    local sink="$1"
+    local node card profile port target line
+    while IFS=$'\t' read -r node card profile port target; do
+        case "$node" in ''|\#*) continue ;; esac
+        if [ "$node" = "$sink" ]; then
+            log "Selected $sink → card=$card profile=$profile port=$port target=$target"
+            local current_profile
+            current_profile=$(pactl -f json list cards \
+                | jq -r --arg c "$card" '.[] | select(.name == $c) | .active_profile')
+            if [ "$current_profile" != "$profile" ]; then
+                pactl set-card-profile "$card" "$profile" 2>/dev/null \
+                    || log "warn: failed to set profile $profile on $card"
+            fi
+            for _ in $(seq 1 5); do
+                pactl list short sinks | grep -q "[[:space:]]${target}[[:space:]]" && break
+                sleep 0.2
+            done
+            pactl set-sink-port "$target" "$port" 2>/dev/null || true
+            return 0
+        fi
+    done < "$META"
+}
+
+for _ in $(seq 1 10); do
+    pactl info >/dev/null 2>&1 && break
+    sleep 0.5
+done
+ensure_links
+
+current=$(pactl get-default-sink 2>/dev/null || true)
+[ -n "$current" ] && apply_for_sink "$current"
+
+pactl subscribe 2>/dev/null | while read -r line; do
+    case "$line" in
+        *"'change' on server"*)
+            new=$(pactl get-default-sink 2>/dev/null || true)
+            if [ -n "$new" ] && [ "$new" != "$current" ]; then
+                current="$new"
+                apply_for_sink "$new"
+            fi
+            ;;
+    esac
+done

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Vendored from shahnawazshahin/steam-using-gamescope-guide (see README
+# attribution). Steam calls this to look for SteamOS system updates; exit 7
+# means "no update available" — client updates are handled by Steam itself,
+# OS updates by pacman.
+exit 7

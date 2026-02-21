@@ -1,0 +1,30 @@
+#!/bin/bash
+# Request a session switch. The root-side starch-session-handoff.path unit
+# consumes the request file and does the teardown + SDDM autologin handoff.
+# Works from the desktop, a TTY, or SSH; the Steam-side equivalent lives in
+# /usr/bin/steamos-session-select (it can't call us — Steam's container
+# doesn't expose /usr/local/bin).
+set -euo pipefail
+
+target="${1:-}"
+case "$target" in
+    steam|desktop|clear) ;;
+    *)
+        echo "usage: starch-session-request {steam|desktop|clear}" >&2
+        echo "  steam    switch to the gamescope Steam session" >&2
+        echo "  desktop  switch to the River desktop session" >&2
+        echo "  clear    remove a pending one-shot autologin" >&2
+        exit 2
+        ;;
+esac
+
+dir="${XDG_STATE_HOME:-$HOME/.local/state}/starch"
+mkdir -p "$dir"
+printf '%s\n' "$target" > "$dir/session-request"
+
+# Leaving river for steam: exit the compositor ourselves — the handoff helper
+# waits for the session to unwind before restarting SDDM.
+if [ "$target" = "steam" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
+   && command -v riverctl >/dev/null 2>&1 && pgrep -x river >/dev/null 2>&1; then
+    riverctl exit 2>/dev/null || true
+fi

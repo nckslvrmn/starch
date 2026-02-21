@@ -1,0 +1,196 @@
+#!/bin/bash
+# ADVANCED / OPT-IN. The default audio path is native WirePlumber (see
+# wireplumber.conf.d/50-starch.conf). This older virtual-sink mode exposes every
+# output port as a separately selectable PipeWire sink (per-port loopback +
+# a watcher that flips the card profile on selection). Run as the user, not root.
+set -u
+
+green() { printf '\e[32m[starch]\e[0m %s\n' "$*"; }
+warn()  { printf '\e[33m[starch]\e[0m WARN: %s\n' "$*"; }
+err()   { printf '\e[31m[starch]\e[0m ERROR: %s\n' "$*" >&2; }
+
+if [ "$(id -u)" -eq 0 ]; then
+    err "Run as your regular user, not root."
+    exit 1
+fi
+
+INCLUDE_PHANTOM=0
+if [ "${1:-}" = "--include-unavailable" ]; then
+    INCLUDE_PHANTOM=1
+fi
+
+PW_CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d"
+STARCH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starch"
+
+PW_CONF="$PW_CONF_DIR/10-starch-virtual-sinks.conf"
+META="$STARCH_DIR/audio-sinks.conf"
+
+mkdir -p "$PW_CONF_DIR" "$STARCH_DIR"
+
+if ! command -v pactl >/dev/null 2>&1; then
+    err "pactl not found. Install pipewire-pulse / pulseaudio-utils."
+    exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+    err "jq not found. Install jq."
+    exit 1
+fi
+
+# Realtek 'Line Out' / 'Auto-Mute Mode' fix — shared helper, also run by
+# install.sh (which persists the result via alsactl store).
+[ -x /usr/local/lib/starch/fix-alsa ] && /usr/local/lib/starch/fix-alsa
+
+slug() { echo "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//'; }
+
+# Emits TSV: card port type availability description profile sink_name
+# One line per output port. The chosen profile is the highest-priority
+# stereo profile that includes the port; sink_name follows PipeWire's ALSA
+# naming convention (alsa_output.<card-suffix>.<profile-suffix>).
+parse_cards() {
+    pactl -f json list cards | jq -r '
+        .[] as $card
+        | ($card.name | sub("^alsa_card\\."; "")) as $card_suf
+        | $card.ports | to_entries[]
+        | .key as $port
+        | .value as $p
+        | select($p.type == "Speaker" or $p.type == "Headphones" or $p.type == "HDMI" or $p.type == "Line")
+        | ($p.availability
+            | if . == "available" then "yes"
+              elif . == "not available" then "no"
+              else "unknown" end) as $avail
+        | ( [ $p.profiles[]
+              | select(. != "off")
+              | select(contains("surround") | not)
+              | . as $pname
+              | ($card.profiles[$pname]) as $pinfo
+              | select($pinfo != null)
+              | { name: $pname,
+                  prio: ($pinfo.priority + (if $pinfo.available then 0 else -100000 end)) }
+            ] | max_by(.prio) ) as $chosen
+        | select($chosen != null)
+        | ($chosen.name
+            | sub("^output:"; "")
+            | sub("\\+input:[^+]*$"; "")
+            | sub("^input:"; "")) as $prof_suf
+        | [$card.name, $port, $p.type, $avail, $p.description,
+           $chosen.name, "alsa_output." + $card_suf + "." + $prof_suf]
+        | @tsv
+    '
+}
+
+PORTS=$(parse_cards)
+
+if [ -z "$PORTS" ]; then
+    err "No output ports discovered."
+    exit 1
+fi
+
+green "Discovered output ports:"
+printf '%s\n' "$PORTS" | while IFS=$'\t' read -r card port type avail desc profile sink; do
+    printf '  • %-22s [%s, avail=%s]\n    card=%s profile=%s sink=%s\n' \
+        "$desc" "$type" "$avail" "$card" "$profile" "$sink"
+done
+
+# Only expose ports whose target ALSA sink exists, else WirePlumber rescues the
+# loopback onto the default sink and feeds back. (HDMI: re-run once plugged in.)
+EXISTING_SINKS=$(pactl list short sinks | awk '{print $2}')
+
+SELECTED_FILE=$(mktemp)
+trap 'rm -f "$SELECTED_FILE"' EXIT
+SKIPPED=""
+while IFS=$'\t' read -r card port type avail desc profile sink; do
+    [ -z "$card" ] && continue
+    if ! grep -qx "$sink" <<< "$EXISTING_SINKS"; then
+        if [ "$INCLUDE_PHANTOM" -eq 0 ]; then
+            SKIPPED="$SKIPPED  • $desc — underlying sink '$sink' not present (plug in device, then re-run)\n"
+            continue
+        fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$card" "$port" "$type" "$avail" "$desc" "$profile" "$sink" >> "$SELECTED_FILE"
+done <<< "$PORTS"
+
+if [ -n "$SKIPPED" ]; then
+    warn "Skipped (no underlying sink yet):"
+    printf '%b' "$SKIPPED"
+fi
+
+if [ ! -s "$SELECTED_FILE" ]; then
+    err "No usable output ports."
+    exit 1
+fi
+
+PREV_HASH=""
+[ -r "$PW_CONF" ] && PREV_HASH=$(sha256sum "$PW_CONF" | awk '{print $1}')
+{
+    echo "# Managed by starch-audio-setup. Do not edit by hand."
+    echo "# Re-run starch-audio-setup to regenerate."
+    echo
+    echo "context.modules = ["
+    while IFS=$'\t' read -r card port type avail desc profile sink; do
+        slug=$(slug "$desc")
+        node_name="starch-out-$slug"
+        cat <<EOF
+    { name = libpipewire-module-loopback
+        args = {
+            node.description = "$desc"
+            capture.props = {
+                node.name        = "$node_name"
+                media.class      = "Audio/Sink"
+                audio.position   = [ FL FR ]
+                device.icon-name = "audio-card"
+            }
+            playback.props = {
+                node.name          = "$node_name.playback"
+                node.autoconnect   = false
+                node.dont-reconnect = true
+                audio.position     = [ FL FR ]
+            }
+        }
+    }
+EOF
+    done < "$SELECTED_FILE"
+    echo "]"
+} > "$PW_CONF"
+
+{
+    echo "# Managed by starch-audio-setup. Do not edit by hand."
+    echo "# Format: node_name<TAB>card<TAB>profile<TAB>port<TAB>target_sink"
+    while IFS=$'\t' read -r card port type avail desc profile sink; do
+        slug=$(slug "$desc")
+        printf 'starch-out-%s\t%s\t%s\t%s\t%s\n' "$slug" "$card" "$profile" "$port" "$sink"
+    done < "$SELECTED_FILE"
+} > "$META"
+
+# Watcher binary and its user unit are installed system-wide by install.sh
+# (/usr/local/bin + /etc/systemd/user); this just turns the unit on.
+systemctl --user daemon-reload
+systemctl --user enable --now starch-audio-port-watcher.service >/dev/null
+
+NEW_HASH=$(sha256sum "$PW_CONF" | awk '{print $1}')
+
+if [ "$PREV_HASH" != "$NEW_HASH" ]; then
+    # No restore-stream wipe here — that was the "volume resets every boot" bug.
+    systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
+    green "PipeWire config changed → restarted pipewire/wireplumber."
+else
+    green "PipeWire config unchanged — skipping restart."
+fi
+
+for _ in $(seq 1 10); do
+    if pactl list short sinks | grep -q starch-out-; then break; fi
+    sleep 0.3
+done
+# Link loopbacks explicitly, else WirePlumber cross-links virtual sinks to each
+# other when several are in the graph.
+while IFS=$'\t' read -r card port type avail desc profile sink; do
+    slug=$(slug "$desc")
+    pw-link "starch-out-$slug.playback:output_FL" "$sink:playback_FL" 2>/dev/null || true
+    pw-link "starch-out-$slug.playback:output_FR" "$sink:playback_FR" 2>/dev/null || true
+done < "$SELECTED_FILE"
+
+green "Wrote $PW_CONF"
+green "Wrote $META"
+green "Enabled starch-audio-port-watcher.service (user unit)"
+green "Done. Open Steam → Settings → Audio; you should see each port as a selectable output."
+green "Tip: install pavucontrol for a GUI port selector."

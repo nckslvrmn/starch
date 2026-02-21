@@ -1,0 +1,13 @@
+# Watches for session-switch requests written by steamos-session-select
+# (which runs inside Steam's PID-namespaced, nosuid client container and can
+# only communicate via the filesystem) and by starch-session-request on the
+# desktop side.
+[Unit]
+Description=Watch for starch session handoff requests
+
+[Path]
+PathChanged=@@GAMING_HOME@@/.local/state/starch/session-request
+Unit=starch-session-handoff.service
+
+[Install]
+WantedBy=multi-user.target

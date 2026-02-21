@@ -1,0 +1,62 @@
+#!/bin/bash
+# Steam's "Switch to Desktop" invokes this with a target (`plasma` on current
+# clients). It must live in /usr/bin — Steam's container only imports that.
+#
+# CONSTRAINT (learned the hard way — the button "never worked"): this runs
+# INSIDE Steam's pressure-vessel client container, which is PID-namespaced
+# (host processes are invisible: pgrep found no gamescope mid-session, pkill
+# and `steam -shutdown`-then-wait can't function) and nosuid (sudo/pkexec
+# fail). Do not add process management or privilege escalation here — it will
+# silently do nothing, again. The only reliable channel out is the
+# filesystem: write a request file in $HOME; the root-side
+# starch-session-handoff.path unit consumes it on the host and performs the
+# teardown + one-shot SDDM autologin into the Desktop.
+set -u
+
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/starch/steam-session-select.log"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+log() { printf '%s steamos-session-select: %s\n' "$(date '+%F %T')" "$*" >> "$LOG" 2>/dev/null || true; }
+
+DRY_RUN=0
+TARGET=""
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        -h|--help)
+            echo "Usage: steamos-session-select [--dry-run] [TARGET]"
+            echo "  TARGET: plasma | plasma-*-persistent | desktop | gamescope (default: desktop)"
+            echo "  Any desktop-ish TARGET hands off to the River desktop session."
+            echo "  --dry-run validates the argument and exits 0 without switching."
+            exit 0
+            ;;
+        -*) ;;  # ignore unknown flags rather than failing the button
+        *) [ -z "$TARGET" ] && TARGET="$arg" ;;
+    esac
+done
+
+log "invoked argv=[$*] target='${TARGET:-<empty>}' dry_run=$DRY_RUN"
+
+case "$TARGET" in
+    gamescope)
+        log "target=gamescope → already in the gamescope session, no-op"
+        exit 0
+        ;;
+    ""|desktop|plasma|plasma-*|gnome|gnome-*|kde|kde-*)
+        ;;
+    *)
+        # Treat unknown targets as desktop so a future Steam rename can't break the button.
+        log "target='$TARGET' unrecognised — treating as desktop hand-off"
+        ;;
+esac
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    log "dry-run: would request desktop handoff for target='${TARGET:-<empty>}' — exiting 0"
+    echo "steamos-session-select: dry-run OK (target='${TARGET:-desktop}' → desktop handoff)"
+    exit 0
+fi
+
+DIR="${XDG_STATE_HOME:-$HOME/.local/state}/starch"
+mkdir -p "$DIR"
+printf 'desktop\n' > "$DIR/session-request"
+log "desktop handoff requested — starch-session-handoff takes it from here"
+exit 0

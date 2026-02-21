@@ -1,0 +1,22 @@
+#!/bin/bash
+# Realtek HDA codecs (e.g. ALC287) ship 'Line Out' at 0% with 'Auto-Mute Mode'
+# disabled, silently gating analog output even when Master/Speaker/PCM look
+# fine. Re-assert sane values; idempotent — only raises levels that are
+# near-zero, always unmutes. Shared by install.sh and starch-audio-setup.
+set -u
+
+command -v amixer >/dev/null 2>&1 || exit 0
+
+for card_idx in $(awk '/^ [0-9]+ \[/ {gsub(/[\[\]]/,""); print $1}' /proc/asound/cards 2>/dev/null); do
+    amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'Line Out'" || continue
+    for ctl in 'Line Out' 'Speaker' 'Headphone' 'PCM' 'Master'; do
+        amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'$ctl'" || continue
+        cur=$(amixer -c "$card_idx" sget "$ctl" 2>/dev/null \
+            | awk '/Playback [0-9]+ \[/ {gsub(/[\[\]%]/,""); for(i=1;i<=NF;i++) if($i~/^[0-9]+$/) {print $i; exit}}')
+        if [ -n "$cur" ] && [ "$cur" -lt 5 ]; then
+            amixer -c "$card_idx" sset "$ctl" 80% unmute >/dev/null 2>&1 || true
+        fi
+        amixer -c "$card_idx" sset "$ctl" unmute >/dev/null 2>&1 || true
+    done
+    amixer -c "$card_idx" sset 'Auto-Mute Mode' 'Enabled' >/dev/null 2>&1 || true
+done

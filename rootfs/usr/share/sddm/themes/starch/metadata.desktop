@@ -1,0 +1,8 @@
+[SddmGreeterTheme]
+Name=starch
+Description=Minimal dark theme with prominent session selection
+Author=starch
+License=MIT
+Type=sddm-theme
+Version=1.0
+QtVersion=6

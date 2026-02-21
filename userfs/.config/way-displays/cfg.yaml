@@ -1,0 +1,19 @@
+# Managed by starch. ORDER is a left-to-right preference list; the first present
+# output becomes primary. Externals first so docking takes over, internal as
+# fallback. Names match connector name or EDID description.
+ORDER:
+  - 'HDMI-A-1'
+  - 'HDMI-A-2'
+  - 'DP-1'
+  - 'DP-2'
+  - 'eDP-1'
+
+# Keep every output at 100% so nothing gets bitmap-scaled (no blur). Text is
+# enlarged instead via font-DPI env vars in the River init, which stays crisp.
+AUTO_SCALE: FALSE
+
+# Use each output's highest mode, not just its preferred one.
+MAX_PREFERRED_REFRESH: FALSE
+
+DISABLED: []
+LOG_THRESHOLD: INFO

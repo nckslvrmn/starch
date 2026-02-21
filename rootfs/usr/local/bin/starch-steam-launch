@@ -1,0 +1,23 @@
+#!/bin/bash
+# Run a command in a bubblewrap namespace where /etc/os-release reports
+# SteamOS. Without this, gamepadui's "Switch to Desktop" and power-menu
+# actions are silently no-ops — they're gated on the os-release marker.
+set -eu
+
+SPOOF=/etc/starch/os-release.steamos
+if [ ! -r "$SPOOF" ]; then
+    echo "starch-steam-launch: $SPOOF missing — re-run install.sh" >&2
+    exec "$@"
+fi
+
+if ! command -v bwrap >/dev/null 2>&1; then
+    echo "starch-steam-launch: bwrap not installed — re-run install.sh" >&2
+    exec "$@"
+fi
+
+# On Arch /etc/os-release is a symlink to /usr/lib/os-release; bind the
+# target so resolvers of the symlink see the spoof too.
+exec bwrap \
+    --dev-bind / / \
+    --bind "$SPOOF" /usr/lib/os-release \
+    -- "$@"

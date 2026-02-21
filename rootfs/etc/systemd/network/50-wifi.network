@@ -1,0 +1,9 @@
+# Managed by starch. iwd handles WiFi association and its own IP config
+# (EnableNetworkConfiguration in iwd/main.conf); this is a belt-and-braces
+# DHCP match so a wlan link still gets an address if iwd's network
+# configuration is ever turned off.
+[Match]
+Name=w*
+
+[Network]
+DHCP=ipv4

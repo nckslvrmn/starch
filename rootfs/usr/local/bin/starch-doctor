@@ -1,0 +1,266 @@
+#!/bin/bash
+# Preflight all the things that can break a session. Safe to run from a TTY.
+set -u
+
+PASS=0
+FAIL=0
+WARN=0
+
+green()  { printf '\e[32m%s\e[0m' "$*"; }
+red()    { printf '\e[31m%s\e[0m' "$*"; }
+yellow() { printf '\e[33m%s\e[0m' "$*"; }
+
+check() {
+    local name="$1" status="$2" detail="${3:-}"
+    case "$status" in
+        pass) printf '  [%s] %s\n' "$(green ' OK ')"   "$name"; PASS=$((PASS+1)) ;;
+        fail) printf '  [%s] %s\n' "$(red 'FAIL')"     "$name"; FAIL=$((FAIL+1)) ;;
+        warn) printf '  [%s] %s\n' "$(yellow 'WARN')"  "$name"; WARN=$((WARN+1)) ;;
+    esac
+    [ -n "$detail" ] && printf '         %s\n' "$detail"
+}
+
+section() { printf '\n\e[1m=== %s ===\e[0m\n' "$1"; }
+
+section "Config"
+
+if [ -r /etc/starch/profile.conf ]; then
+    check "/etc/starch/profile.conf readable" pass "$(tr '\n' ' ' < /etc/starch/profile.conf)"
+else
+    check "/etc/starch/profile.conf readable" warn "missing — re-run install.sh (refresh fallback unset)"
+fi
+
+section "Kernel & boot"
+
+if grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
+    check "nvidia_drm.modeset=1 in cmdline" pass
+else
+    check "nvidia_drm.modeset=1 in cmdline" fail "add to bootloader, or NVIDIA suspend/Wayland will break"
+fi
+
+for m in nvidia nvidia_modeset nvidia_drm; do
+    if [ -d "/sys/module/$m" ]; then check "module $m loaded" pass
+    else check "module $m loaded" fail "modprobe $m failing — check dmesg | grep nvidia"
+    fi
+done
+
+section "Rolling-release drift"
+
+# Loaded NVIDIA module vs installed userspace — a partial upgrade here means
+# GL/Vulkan failures now and likely a black screen next boot.
+if [ -r /sys/module/nvidia/version ]; then
+    mod_ver=$(cat /sys/module/nvidia/version)
+    pkg_ver=$(pacman -Q nvidia-utils 2>/dev/null | awk '{print $2}' | cut -d- -f1)
+    if [ -n "$pkg_ver" ]; then
+        if [ "$mod_ver" = "$pkg_ver" ]; then
+            check "NVIDIA module matches nvidia-utils ($mod_ver)" pass
+        else
+            check "NVIDIA module ($mod_ver) vs nvidia-utils ($pkg_ver)" fail \
+                "version drift — reboot (or fix the partial upgrade) before gaming"
+        fi
+    fi
+fi
+
+# Running kernel vs installed kernel package — after a kernel upgrade, modules
+# for the running kernel are gone until reboot (sessions fail mysteriously).
+if pacman -Q linux &>/dev/null; then
+    running=$(uname -r | sed 's/-/./')
+    installed=$(pacman -Q linux | awk '{print $2}')
+    if [ "$running" = "$installed" ]; then
+        check "running kernel matches installed linux package" pass "$installed"
+    else
+        check "running kernel ($(uname -r)) vs installed ($installed)" warn \
+            "kernel upgraded since boot — REBOOT before starting a session"
+    fi
+fi
+
+if command -v dkms >/dev/null 2>&1; then
+    if dkms status 2>/dev/null | grep -i xpadneo | grep -q "$(uname -r).*installed"; then
+        check "xpadneo dkms built for running kernel" pass
+    else
+        check "xpadneo dkms built for running kernel" warn \
+            "dkms status has no xpadneo for $(uname -r) — Xbox BT controllers degraded"
+    fi
+fi
+
+section "Memory safety"
+
+if swapon --show --noheadings 2>/dev/null | grep -q zram; then
+    check "zram swap active" pass
+else
+    check "zram swap active" warn "no zram — an OOM mid-game is a hard freeze (re-run install.sh)"
+fi
+if systemctl is-active systemd-oomd.service &>/dev/null; then
+    check "systemd-oomd active" pass
+else
+    check "systemd-oomd active" warn "no userspace OOM killer"
+fi
+
+section "Network stack"
+
+for svc in iwd.service systemd-networkd.service systemd-resolved.service; do
+    if systemctl is-enabled "$svc" &>/dev/null; then check "$svc enabled" pass
+    else check "$svc enabled" warn "starch network stack expects this enabled — re-run install.sh"
+    fi
+done
+
+section "DRM devices"
+
+if compgen -G '/dev/dri/card*' >/dev/null; then
+    check "/dev/dri/card* present" pass "$(ls /dev/dri/card* 2>/dev/null | tr '\n' ' ')"
+else
+    check "/dev/dri/card* present" fail "no DRM devices — kernel module not loaded or BIOS GPU mode wrong"
+fi
+
+if compgen -G '/sys/class/drm/card*-*/status' >/dev/null; then
+    connected=0
+    for f in /sys/class/drm/card*-*/status; do
+        [ "$(cat "$f" 2>/dev/null)" = "connected" ] && connected=$((connected+1))
+    done
+    if [ "$connected" -gt 0 ]; then
+        check "$connected display(s) connected" pass
+    else
+        check "displays connected" warn "no connected outputs detected (lid closed? cable unplugged?)"
+    fi
+fi
+
+section "Backlight (Steam brightness slider)"
+
+if compgen -G '/sys/class/backlight/*' >/dev/null 2>&1; then
+    # Reuse the profile library's detection so doctor and the sessions agree.
+    BL=""
+    if [ -r /usr/local/lib/starch/profile.sh ]; then
+        # shellcheck disable=SC1091
+        . /usr/local/lib/starch/profile.sh
+        BL=$(starch_backlight_device 2>/dev/null || true)
+    fi
+    if [ -n "$BL" ]; then
+        check "backlight device detected" pass "$BL"
+        bf="/sys/class/backlight/$BL/brightness"
+        if [ -w "$bf" ]; then
+            check "$bf writable by session" pass
+        else
+            owner=$(stat -c '%G' "$bf" 2>/dev/null || echo '?')
+            check "$bf writable by session" warn \
+                "group=$owner — reboot after install so the udev rule + 'video' group apply; slider needs g+w"
+        fi
+    else
+        check "backlight device detected" warn "no usable /sys/class/backlight device (pure-NVIDIA panels often expose none)"
+    fi
+else
+    check "backlight class present" warn "no /sys/class/backlight — internal-panel brightness control unavailable"
+fi
+
+section "Required binaries"
+
+for bin in gamescope steam cage wpctl modetest udevadm sddm wlr-randr; do
+    if command -v "$bin" >/dev/null 2>&1; then check "$bin"  pass
+    else check "$bin" warn "not in PATH"
+    fi
+done
+
+# gamescope's --rt and nice -20 are gated on CAP_SYS_NICE; without it the
+# session log shows "Performance will be affected".
+GS_BIN=$(command -v gamescope 2>/dev/null || true)
+if [ -n "$GS_BIN" ] && command -v getcap >/dev/null 2>&1; then
+    if getcap "$GS_BIN" 2>/dev/null | grep -q cap_sys_nice; then
+        check "gamescope has CAP_SYS_NICE (realtime scheduling)" pass
+    else
+        check "gamescope has CAP_SYS_NICE (realtime scheduling)" fail \
+            "setcap cap_sys_nice=eip $GS_BIN — re-run install.sh; --rt is a no-op without it"
+    fi
+fi
+
+section "Services"
+
+for svc in sddm.service NetworkManager.service; do
+    if systemctl is-enabled "$svc" &>/dev/null; then check "$svc enabled" pass
+    else check "$svc enabled" fail
+    fi
+    if systemctl is-active "$svc" &>/dev/null; then check "$svc active" pass
+    else check "$svc active" warn
+    fi
+done
+
+for svc in nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service; do
+    if systemctl is-enabled "$svc" &>/dev/null; then check "$svc enabled" pass
+    else check "$svc enabled" warn "suspend/resume may corrupt GPU VRAM"
+    fi
+done
+
+section "Power / battery (Steam gamepadui)"
+
+if command -v upower >/dev/null 2>&1; then
+    check "upower installed" pass
+    if upower -e 2>/dev/null | grep -q 'battery'; then
+        check "battery device present" pass "$(upower -e 2>/dev/null | grep battery | tr '\n' ' ')"
+    else
+        check "battery device present" warn "no battery enumerated (desktop, or upower not yet activated) — fine on a desktop"
+    fi
+else
+    check "upower installed" warn "not installed — Steam won't show a battery indicator on laptops"
+fi
+
+section "Sessions installed"
+
+for s in steam starch-river; do
+    if [ -e "/usr/local/share/wayland-sessions/$s.desktop" ]; then check "$s.desktop" pass
+    else check "$s.desktop" warn "missing from /usr/local/share/wayland-sessions — re-run install.sh"
+    fi
+done
+
+# SDDM must scan only the starch session dir, else upstream river.desktop shows.
+if grep -rqs '^SessionDir=/usr/local/share/wayland-sessions' /etc/sddm.conf.d/ 2>/dev/null; then
+    check "SDDM SessionDir scoped to starch sessions" pass
+else
+    check "SDDM SessionDir scoped to starch sessions" warn \
+        "SessionDir not set — upstream river.desktop may show in the greeter"
+fi
+
+for s in start-steam start-river starch-steam-launch steamos-session-select starch-select-display; do
+    p=$(command -v "$s" 2>/dev/null || true)
+    if [ -n "$p" ] && [ -x "$p" ]; then check "$s executable" pass "$p"
+    else check "$s executable" fail "missing or not executable"
+    fi
+done
+
+# Steam's "Switch to Desktop" invokes `steamos-session-select plasma`; verify it
+# accepts that without erroring (a prior strict case broke the button silently).
+if command -v steamos-session-select >/dev/null 2>&1; then
+    if steamos-session-select --dry-run plasma >/dev/null 2>&1; then
+        check "steamos-session-select accepts 'plasma'" pass "(Switch to Desktop wired correctly)"
+    else
+        check "steamos-session-select accepts 'plasma'" fail \
+            "dry-run rejected 'plasma' — Switch to Desktop will be a no-op"
+    fi
+fi
+
+# Steam's pressure-vessel runtime only searches /usr/bin, so the button is a
+# silent no-op unless the script lives there specifically.
+if [ -x /usr/bin/steamos-session-select ]; then
+    check "steamos-session-select in /usr/bin (Steam-visible)" pass
+else
+    check "steamos-session-select in /usr/bin (Steam-visible)" fail \
+        "Steam's sandbox can't see it elsewhere — Switch to Desktop does nothing"
+fi
+
+# The button only writes a request file (Steam's container is PID-namespaced
+# and nosuid); this root-side path unit is what actually performs the switch.
+if systemctl is-enabled starch-session-handoff.path &>/dev/null \
+   && systemctl is-active starch-session-handoff.path &>/dev/null; then
+    check "starch-session-handoff.path active (performs the switch)" pass
+else
+    check "starch-session-handoff.path active (performs the switch)" fail \
+        "re-run install.sh — without it, Switch to Desktop writes a request nobody reads"
+fi
+
+if [ -e /etc/sddm.conf.d/zz-starch-autologin.conf ]; then
+    check "no stale one-shot autologin conf" warn \
+        "zz-starch-autologin.conf exists — next SDDM start skips the greeter; delete if unexpected"
+else
+    check "no stale one-shot autologin conf" pass
+fi
+
+# ---------------------------------------------------------------------------
+printf '\nSummary: %s pass, %s warn, %s fail\n' "$(green "$PASS")" "$(yellow "$WARN")" "$(red "$FAIL")"
+[ "$FAIL" -eq 0 ]

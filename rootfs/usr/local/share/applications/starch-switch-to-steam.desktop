@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Switch to Steam
+Comment=Leave the desktop and start the gamescope Steam session
+Exec=starch-session-request steam
+Type=Application
+Icon=steam
+Categories=Game;

@@ -1,0 +1,115 @@
+#!/bin/bash
+# starch on-screen-display: perform a volume/brightness change (or read the
+# battery) and fire a mako notification showing the result. Bound to the media
+# keys and Super+B in river/init.
+#
+# Each notification uses the x-canonical-private-synchronous hint so repeats in
+# the same group replace the prior toast instead of stacking — holding a volume
+# key won't pile up notifications. The int:value hint drives mako's progress bar
+# (progress-color in ~/.config/mako/config).
+
+set -u
+
+SINK="@DEFAULT_AUDIO_SINK@"
+
+# Use the profile lib's backlight detection so the OSD drives the same device
+# the rest of starch does — machines expose several backlight nodes and
+# brightnessctl's default pick can be an inert one.
+BCTL=(brightnessctl)
+if [ -r /usr/local/lib/starch/profile.sh ]; then
+    # shellcheck disable=SC1091
+    . /usr/local/lib/starch/profile.sh
+    _bl=$(starch_backlight_device 2>/dev/null || true)
+    [ -n "$_bl" ] && BCTL=(brightnessctl -d "$_bl")
+fi
+
+# notify <group> <title> <body> [value 0-100]
+notify() {
+    local group="$1" title="$2" body="$3" value="${4:-}"
+    local args=(-h "string:x-canonical-private-synchronous:$group" -t 2000)
+    [ -n "$value" ] && args+=(-h "int:value:$value")
+    notify-send "${args[@]}" "$title" "$body"
+}
+
+sink_volume() {
+    # Integer percent of the default sink.
+    wpctl get-volume "$SINK" 2>/dev/null | awk '{printf "%d", $2 * 100}'
+}
+
+sink_muted() {
+    wpctl get-volume "$SINK" 2>/dev/null | grep -q '\[MUTED\]'
+}
+
+brightness_pct() {
+    # brightnessctl -m: "name,class,current,percent,max" — field 4 is "NN%".
+    "${BCTL[@]}" -m 2>/dev/null | cut -d, -f4 | tr -d '%'
+}
+
+show_volume() {
+    if sink_muted; then
+        notify volume "Volume" "Muted" 0
+    else
+        local v; v=$(sink_volume)
+        notify volume "Volume" "${v}%" "$v"
+    fi
+}
+
+show_battery() {
+    local dev info cap state secs time body=""
+    dev=$(upower -e 2>/dev/null | grep -m1 -i 'battery_BAT')
+    if [ -n "$dev" ]; then
+        info=$(upower -i "$dev" 2>/dev/null)
+        cap=$(awk '/percentage:/  { gsub(/%/,"",$2); printf "%d", $2 }' <<<"$info")
+        state=$(awk '/state:/      { print $2 }' <<<"$info")
+        time=$(awk -F'[[:space:]][[:space:]]+' '/time to empty:|time to full:/ { print $3 }' <<<"$info")
+    fi
+    # Fallback to sysfs if upower gave us nothing.
+    if [ -z "${cap:-}" ]; then
+        local bat
+        bat=$(echo /sys/class/power_supply/BAT* | awk '{print $1}')
+        [ -d "$bat" ] && cap=$(cat "$bat/capacity" 2>/dev/null) \
+                      && state=$(tr '[:upper:]' '[:lower:]' < "$bat/status" 2>/dev/null)
+    fi
+    if [ -z "${cap:-}" ]; then
+        notify battery "Battery" "No battery detected"
+        return
+    fi
+    body="${cap}%"
+    [ -n "${state:-}" ] && body="$body — $state"
+    [ -n "${time:-}" ]  && body="$body ($time left)"
+    notify battery "Battery" "$body" "$cap"
+}
+
+case "${1:-}" in
+    vol-up)
+        wpctl set-mute "$SINK" 0
+        wpctl set-volume -l 1.0 "$SINK" 5%+
+        show_volume
+        ;;
+    vol-down)
+        wpctl set-mute "$SINK" 0
+        wpctl set-volume -l 1.0 "$SINK" 5%-
+        show_volume
+        ;;
+    mute)
+        wpctl set-mute "$SINK" toggle
+        show_volume
+        ;;
+    bright-up)
+        "${BCTL[@]}" set 5%+ >/dev/null
+        pct=$(brightness_pct)
+        notify brightness "Brightness" "${pct}%" "$pct"
+        ;;
+    bright-down)
+        "${BCTL[@]}" set 5%- >/dev/null
+        pct=$(brightness_pct)
+        notify brightness "Brightness" "${pct}%" "$pct"
+        ;;
+    battery)
+        show_battery
+        ;;
+    *)
+        echo "usage: starch-osd {vol-up|vol-down|mute|bright-up|bright-down|battery}" >&2
+        exit 1
+        ;;
+esac

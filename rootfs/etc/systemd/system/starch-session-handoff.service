@@ -1,0 +1,6 @@
+[Unit]
+Description=starch session handoff (Steam ⇄ Desktop switching)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/starch/session-handoff

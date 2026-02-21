@@ -1,0 +1,31 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n every script
+        run: |
+          set -e
+          for f in install.sh \
+                   rootfs/usr/local/bin/* \
+                   rootfs/usr/local/bin/steamos-polkit-helpers/* \
+                   rootfs/usr/bin/* \
+                   rootfs/usr/local/lib/starch/* \
+                   userfs/.config/river/init; do
+            [ -f "$f" ] || continue
+            # shebang'd scripts and shebang-less sourced libs (shellcheck directive)
+            head -1 "$f" | grep -q '^#!.*\(bash\|sh\)\|^# shellcheck shell=' || continue
+            bash -n "$f"
+            echo "OK: $f"
+          done
+
+      - name: validate session desktop files
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq desktop-file-utils
+          desktop-file-validate rootfs/usr/local/share/wayland-sessions/*.desktop
+          desktop-file-validate rootfs/usr/local/share/applications/*.desktop
