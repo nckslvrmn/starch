@@ -4,12 +4,18 @@
 # Deploy:
 #   sudo install -Dm755 scripts/steam-session.sh /usr/local/bin/steam-session.sh
 #
-# ANTI-FLICKER TUNING:
-#   If flickering occurs, comment out --adaptive-sync and/or --immediate-flips
-#   in the gamescope invocation at the bottom of this file.
+# TUNING:
+#   If you experience flickering or gamescope refuses to start, try removing
+#   --adaptive-sync from the gamescope invocation below.
+#
+# LOG FILE: /tmp/steam-session.log — check this after a failed session.
 # ---------------------------------------------------------------------------
 
 set -uo pipefail
+
+# Redirect all output to a log file. greetd also captures it in the journal,
+# but the log file is easier to read after the session exits.
+exec 1>/tmp/steam-session.log 2>&1
 
 # ---------------------------------------------------------------------------
 # Phase 1: Dynamic device and display detection
@@ -50,6 +56,13 @@ REFRESH="${REFRESH:-165}"
 echo "[steam-session] DRM device : $DRM_DEVICE"
 echo "[steam-session] Output     : $OUTPUT_NAME"
 echo "[steam-session] Resolution : ${WIDTH}x${HEIGHT}@${REFRESH}Hz"
+echo "[steam-session] gamescope  : $(gamescope --version 2>&1 | head -1)"
+
+# Verify the DRM device actually exists before handing off to gamescope
+if [ ! -e "$DRM_DEVICE" ]; then
+    echo "[steam-session] ERROR: DRM device $DRM_DEVICE not found. Aborting."
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Phase 2: Environment
@@ -78,50 +91,78 @@ export PROTON_ENABLE_NVAPI=1      # Enable DLSS, Reflex, NVAPI features
 export DXVK_ASYNC=1               # Async pipeline compilation (reduces stutter)
 export STEAM_RUNTIME_HEAVY=1      # Use Steam Runtime with full compat libs
 
-# Gamemode: auto-preload for both 64-bit and 32-bit processes.
-# $LIB is expanded by the dynamic linker (not the shell), resolving to
-# 'lib' for 64-bit and 'lib32' for 32-bit executables.
-export LD_PRELOAD="${LD_PRELOAD:-}:/usr/\$LIB/libgamemodeauto.so.0"
+# NOTE: Do NOT set LD_PRELOAD for libgamemodeauto here.
+# Loading it before dbus-run-session causes D-Bus to try to auto-activate
+# the gamemode service, which blocks for ~60 seconds if gamemoded is not
+# already running. Instead, gamemoded is started inside the D-Bus session
+# below, and gamescope is wrapped with gamemoderun.
 
 # ---------------------------------------------------------------------------
-# Phase 3: Audio — start Pipewire if not already running
+# Phase 3: Audio — start each daemon only if not already running
 # ---------------------------------------------------------------------------
+# Check each process independently. If switching from another session (e.g.
+# River), some of these may already be running. Starting a second wireplumber
+# instance in particular will cause it to core dump.
 
-if ! pgrep -u "$USER" pipewire &>/dev/null; then
+if ! pgrep -u "$USER" -x pipewire &>/dev/null; then
     pipewire &
+    # Wait for the pipewire socket before starting dependents
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        [ -S "/run/user/$(id -u)/pipewire-0" ] && break
+        sleep 0.1
+    done
+fi
+
+if ! pgrep -u "$USER" -x wireplumber &>/dev/null; then
     wireplumber &
+fi
+
+if ! pgrep -u "$USER" -x pipewire-pulse &>/dev/null; then
     pipewire-pulse &
-    sleep 0.5
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4: Launch gamescope → Steam Big Picture
+# Phase 4: Launch gamescope → Steam Big Picture inside a D-Bus session
 # ---------------------------------------------------------------------------
+# gamemoded must start INSIDE the D-Bus session so it can register on the
+# session bus. gamescope is then wrapped with gamemoderun, which connects to
+# the already-running gamemoded — no LD_PRELOAD, no activation hang.
+#
+# Exported variables are inherited by the inner bash process.
+#
 # Flags:
-#   --backend drm        : DRM/KMS client — no parent compositor needed
-#   --drm-device         : explicit DRM device (detected above)
-#   --prefer-output      : target output name (e.g., eDP-1)
-#   -W / -H              : output resolution
-#   -r                   : target refresh rate
-#   --adaptive-sync      : VRR / FreeSync (remove if flickering)
-#   --immediate-flips    : low-latency presentation (remove if flickering)
-#   --rt                 : realtime priority for compositor thread
-#   --steam              : enable Steam overlay and IPC integration
-#   --xwayland-count 2   : two Xwayland instances for better game compatibility
+#   --backend drm      : DRM/KMS direct client — no parent compositor needed
+#   --drm-device       : explicit DRM device path (detected above)
+#   --prefer-output    : target output by name (e.g., eDP-1)
+#   -W / -H            : output resolution
+#   -r                 : target refresh rate
+#   --adaptive-sync    : enable VRR/FreeSync if panel and driver support it
+#   --immediate-flips  : low-latency page flips
+#   --rt               : realtime compositor thread priority
+#   --steam            : Steam overlay and IPC integration
 #
 # Steam flags:
-#   -tenfoot             : Big Picture / TV mode UI
-#   -steamos3            : gamescope integration (overlay, suspend/resume hooks)
+#   -tenfoot           : Big Picture / TV mode UI
+#   -steamos3          : gamescope overlay and suspend/resume hook integration
 
-exec dbus-run-session -- gamescope \
-    --backend drm \
-    --drm-device "$DRM_DEVICE" \
-    --prefer-output "$OUTPUT_NAME" \
-    -W "$WIDTH" -H "$HEIGHT" \
-    -r "$REFRESH" \
-    --adaptive-sync \
-    --immediate-flips \
-    --rt \
-    --steam \
-    --xwayland-count 2 \
-    -- steam -tenfoot -steamos3
+export DRM_DEVICE OUTPUT_NAME WIDTH HEIGHT REFRESH
+
+echo "[steam-session] Entering D-Bus session..."
+exec dbus-run-session -- bash -c '
+    echo "[steam-session] Starting gamemoded..."
+    gamemoded &
+    sleep 0.3
+
+    echo "[steam-session] Launching gamescope..."
+    exec gamemoderun gamescope \
+        --backend drm \
+        --drm-device "$DRM_DEVICE" \
+        --prefer-output "$OUTPUT_NAME" \
+        -W "$WIDTH" -H "$HEIGHT" \
+        -r "$REFRESH" \
+        --adaptive-sync \
+        --immediate-flips \
+        --rt \
+        --steam \
+        -- steam -tenfoot -steamos3
+'
