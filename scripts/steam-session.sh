@@ -79,8 +79,15 @@ export NVD_BACKEND=direct
 # Prevent hardware cursor rendering issues on NVIDIA/Wayland
 export WLR_NO_HARDWARE_CURSORS=1
 
-# Prefer the NVIDIA Vulkan ICD explicitly
-export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+# Do NOT set VK_ICD_FILENAMES. gamescope matches Vulkan physical devices to DRM
+# devices by comparing DRM major/minor numbers via VkPhysicalDeviceDrmPropertiesEXT.
+# Restricting to a single ICD can break this matching if gamescope enumerates the
+# Intel DRM device first (it still appears in sysfs even in discrete GPU mode) and
+# can't find a corresponding Vulkan physical device for it.
+
+# Ensure the NVIDIA EGL vendor is used for GBM buffer allocation.
+# Even though gamescope uses Vulkan, NVIDIA's GBM backend goes through EGL internally.
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
 # Session type — tell Steam and Proton we are on Wayland
 export XDG_SESSION_TYPE=wayland
@@ -132,8 +139,6 @@ fi
 #
 # Flags:
 #   --backend drm      : DRM/KMS direct client — no parent compositor needed
-#   --drm-device       : explicit DRM device path (detected above)
-#   --prefer-output    : target output by name (e.g., eDP-1)
 #   -W / -H            : output resolution
 #   -r                 : target refresh rate
 #   --adaptive-sync    : enable VRR/FreeSync if panel and driver support it
@@ -145,7 +150,7 @@ fi
 #   -tenfoot           : Big Picture / TV mode UI
 #   -steamos3          : gamescope overlay and suspend/resume hook integration
 
-export DRM_DEVICE OUTPUT_NAME WIDTH HEIGHT REFRESH
+export OUTPUT_NAME WIDTH HEIGHT REFRESH
 
 echo "[steam-session] Entering D-Bus session..."
 exec dbus-run-session -- bash -c '
@@ -156,8 +161,6 @@ exec dbus-run-session -- bash -c '
     echo "[steam-session] Launching gamescope..."
     exec gamemoderun gamescope \
         --backend drm \
-        --drm-device "$DRM_DEVICE" \
-        --prefer-output "$OUTPUT_NAME" \
         -W "$WIDTH" -H "$HEIGHT" \
         -r "$REFRESH" \
         --adaptive-sync \
