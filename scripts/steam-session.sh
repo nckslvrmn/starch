@@ -57,6 +57,12 @@ echo "[steam-session] DRM device : $DRM_DEVICE"
 echo "[steam-session] Output     : $OUTPUT_NAME"
 echo "[steam-session] Resolution : ${WIDTH}x${HEIGHT}@${REFRESH}Hz"
 echo "[steam-session] gamescope  : $(gamescope --version 2>&1 | head -1)"
+echo ""
+echo "[steam-session] Log file   : /tmp/steam-session.log"
+echo "[steam-session] Launching in 10s — switch to TTY2 now and run:"
+echo "                  tail -f /tmp/steam-session.log"
+echo ""
+sleep 10
 
 # Verify the DRM device actually exists before handing off to gamescope
 if [ ! -e "$DRM_DEVICE" ]; then
@@ -167,8 +173,6 @@ exec dbus-run-session -- bash -c '
         -e \
         -W "$WIDTH" -H "$HEIGHT" \
         -r "$REFRESH" \
-        --adaptive-sync \
-        --immediate-flips \
         --rt \
         --steam \
         -- steam -tenfoot -steamos3

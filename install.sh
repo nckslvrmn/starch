@@ -38,6 +38,14 @@ if ! id "$GAMING_USER" &>/dev/null; then
     exit 1
 fi
 
+# paru must run as a regular user — verify it is installed for GAMING_USER
+if ! sudo -u "$GAMING_USER" -H which paru &>/dev/null; then
+    error "paru not found for user $GAMING_USER."
+    error "Install paru first, then re-run this script:"
+    error "  https://github.com/morganamilo/paru#installation"
+    exit 1
+fi
+
 info "Installing starch gaming session for user: $GAMING_USER"
 
 # ---------------------------------------------------------------------------
@@ -88,14 +96,18 @@ PACKAGES=(
 
     # kmsprint — used by steam-session.sh to detect display resolution
     libdrm
+
+    # AUR: improved Xbox controller driver (rumble, adaptive triggers,
+    # better Bluetooth reliability vs the in-kernel xpad module)
+    xpadneo-dkms
 )
 
-pacman -S --needed --noconfirm "${PACKAGES[@]}"
+# paru refuses to run as root; invoke it as the gaming user.
+# -H sets HOME to the user's home so paru uses the correct cache/config.
+# --skipreview suppresses the AUR PKGBUILD diff prompt for non-interactive use.
+sudo -u "$GAMING_USER" -H paru -S --needed --noconfirm --skipreview "${PACKAGES[@]}"
 
-info "Core packages installed."
-warn "For better Xbox controller support (rumble, adaptive triggers),"
-warn "install 'xpadneo-dkms' from the AUR after this script completes:"
-warn "  yay -S xpadneo-dkms  (or your preferred AUR helper)"
+info "Packages installed."
 
 # ---------------------------------------------------------------------------
 # 2. Deploy /etc configuration files
@@ -245,7 +257,4 @@ echo "  ANTI-FLICKER:"
 echo "    If flickering occurs after reboot, edit:"
 echo "      /usr/local/bin/steam-session.sh"
 echo "    Comment out --adaptive-sync and/or --immediate-flips"
-echo ""
-echo "  AUR package (optional, for Xbox controller rumble/triggers):"
-echo "    yay -S xpadneo-dkms"
 echo ""
