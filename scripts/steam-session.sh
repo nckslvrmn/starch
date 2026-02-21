@@ -129,26 +129,30 @@ if ! pgrep -u "$USER" -x pipewire-pulse &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4: Launch gamescope → Steam Big Picture inside a D-Bus session
+# Phase 4: cage → gamescope → Steam inside a D-Bus session
 # ---------------------------------------------------------------------------
-# gamemoded must start INSIDE the D-Bus session so it can register on the
-# session bus. gamescope is then wrapped with gamemoderun, which connects to
-# the already-running gamemoded — no LD_PRELOAD, no activation hang.
+# gamescope's own DRM backend is incompatible with NVIDIA's Vulkan format
+# modifier implementation (returns 0 modifiers for all DRM formats).
 #
-# Exported variables are inherited by the inner bash process.
+# Solution: cage (a minimal wlroots compositor) takes DRM master and handles
+# the NVIDIA GBM/KMS layer. gamescope runs nested inside cage as a Wayland
+# client — it auto-detects WAYLAND_DISPLAY and uses the Wayland backend,
+# never touching DRM format modifiers directly.
 #
-# Flags:
-#   --backend drm      : DRM/KMS direct client — no parent compositor needed
-#   -W / -H            : output resolution
-#   -r                 : target refresh rate
-#   --adaptive-sync    : enable VRR/FreeSync if panel and driver support it
-#   --immediate-flips  : low-latency page flips
-#   --rt               : realtime compositor thread priority
-#   --steam            : Steam overlay and IPC integration
+# cage inherits all the NVIDIA env vars set above (GBM_BACKEND, etc.) and
+# uses them for its own wlroots initialization.
+#
+# gamescope flags (nested/Wayland mode):
+#   -e / --steam     : Steam overlay and IPC integration
+#   -W / -H          : output resolution hint passed to the outer compositor
+#   -r               : target refresh rate
+#   --adaptive-sync  : request VRR from cage/wlroots
+#   --immediate-flips: low-latency presentation
+#   --rt             : realtime compositor thread priority
 #
 # Steam flags:
-#   -tenfoot           : Big Picture / TV mode UI
-#   -steamos3          : gamescope overlay and suspend/resume hook integration
+#   -tenfoot         : Big Picture / TV mode UI
+#   -steamos3        : gamescope overlay and suspend/resume hook integration
 
 export OUTPUT_NAME WIDTH HEIGHT REFRESH
 
@@ -158,9 +162,9 @@ exec dbus-run-session -- bash -c '
     gamemoded &
     sleep 0.3
 
-    echo "[steam-session] Launching gamescope..."
-    exec gamemoderun gamescope \
-        --backend drm \
+    echo "[steam-session] Launching cage → gamescope → steam..."
+    exec gamemoderun cage -- gamescope \
+        -e \
         -W "$WIDTH" -H "$HEIGHT" \
         -r "$REFRESH" \
         --adaptive-sync \

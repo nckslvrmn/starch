@@ -47,7 +47,12 @@ info "Installing starch gaming session for user: $GAMING_USER"
 step "Installing packages"
 
 PACKAGES=(
-    # Valve's micro-compositor — the core of this setup
+    # cage — minimal wlroots compositor that sits between greetd and gamescope.
+    # wlroots handles DRM/NVIDIA KMS correctly; gamescope runs nested inside it
+    # to avoid its own DRM backend's NVIDIA format modifier incompatibility.
+    cage
+
+    # Gamescope — Valve's micro-compositor, runs nested inside cage
     gamescope
 
     # Steam client
