@@ -55,12 +55,7 @@ info "Installing starch gaming session for user: $GAMING_USER"
 step "Installing packages"
 
 PACKAGES=(
-    # cage — minimal wlroots compositor that sits between greetd and gamescope.
-    # wlroots handles DRM/NVIDIA KMS correctly; gamescope runs nested inside it
-    # to avoid its own DRM backend's NVIDIA format modifier incompatibility.
-    cage
-
-    # Gamescope — Valve's micro-compositor, runs nested inside cage
+    # Gamescope — Valve's micro-compositor, runs as DRM master
     gamescope
 
     # Steam client
@@ -94,7 +89,7 @@ PACKAGES=(
     lib32-pipewire
     wireplumber
 
-    # kmsprint — used by steam-session.sh to detect display resolution
+    # kmsprint — used by start-steam to detect display resolution
     libdrm
 
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
@@ -140,25 +135,92 @@ install -Dm644 "$SCRIPT_DIR/etc/gamemode.ini" \
     /etc/gamemode.ini
 info "  /etc/gamemode.ini"
 
+# greetd login manager configuration (tuigreet with --time --remember --asterisks)
+install -Dm644 "$SCRIPT_DIR/etc/greetd/config.toml" \
+    /etc/greetd/config.toml
+info "  /etc/greetd/config.toml"
+
 # ---------------------------------------------------------------------------
 # 3. Session launcher script
 # ---------------------------------------------------------------------------
 
-step "Installing steam-session.sh"
+step "Installing start-steam"
 
-install -Dm755 "$SCRIPT_DIR/scripts/steam-session.sh" \
-    /usr/local/bin/steam-session.sh
-info "  /usr/local/bin/steam-session.sh"
+install -Dm755 "$SCRIPT_DIR/scripts/start-steam" \
+    /usr/local/bin/start-steam
+info "  /usr/local/bin/start-steam"
+
+install -Dm755 "$SCRIPT_DIR/scripts/start-river" \
+    /usr/local/bin/start-river
+info "  /usr/local/bin/start-river"
 
 # ---------------------------------------------------------------------------
-# 4. Wayland session descriptor (picked up by greetd/tuigreet)
+# 3b. SteamOS compatibility helpers (from shahnawazshahin/steam-using-gamescope-guide)
 # ---------------------------------------------------------------------------
 
-step "Installing Wayland session descriptor"
+step "Installing SteamOS compatibility helpers"
 
-install -Dm644 "$SCRIPT_DIR/sessions/steam-gaming.desktop" \
-    /usr/share/wayland-sessions/steam-gaming.desktop
-info "  /usr/share/wayland-sessions/steam-gaming.desktop"
+# Clone/update the source repository
+STEAMOS_GUIDE_REPO="/tmp/steam-using-gamescope-guide"
+if [ -d "$STEAMOS_GUIDE_REPO" ]; then
+    (cd "$STEAMOS_GUIDE_REPO" && git pull -q origin main 2>/dev/null) || true
+else
+    git clone -q https://github.com/shahnawazshahin/steam-using-gamescope-guide.git "$STEAMOS_GUIDE_REPO" 2>/dev/null || {
+        warn "Could not clone steamos helper scripts from GitHub. Skipping optional helpers."
+        STEAMOS_GUIDE_REPO=""
+    }
+fi
+
+if [ -n "$STEAMOS_GUIDE_REPO" ] && [ -d "$STEAMOS_GUIDE_REPO/usr/bin" ]; then
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-update" \
+        /usr/local/bin/steamos-update
+    info "  /usr/local/bin/steamos-update"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/jupiter-biosupdate" \
+        /usr/local/bin/jupiter-biosupdate
+    info "  /usr/local/bin/jupiter-biosupdate"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-polkit-helpers/steamos-update" \
+        /usr/local/bin/steamos-polkit-helpers/steamos-update
+    info "  /usr/local/bin/steamos-polkit-helpers/steamos-update"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-polkit-helpers/jupiter-biosupdate" \
+        /usr/local/bin/steamos-polkit-helpers/jupiter-biosupdate
+    info "  /usr/local/bin/steamos-polkit-helpers/jupiter-biosupdate"
+
+    install -Dm755 "$STEAMOS_GUIDE_REPO/usr/bin/steamos-polkit-helpers/steamos-set-timezone" \
+        /usr/local/bin/steamos-polkit-helpers/steamos-set-timezone
+    info "  /usr/local/bin/steamos-polkit-helpers/steamos-set-timezone"
+else
+    warn "SteamOS helper scripts not available. These are optional but recommended."
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Wayland session descriptors (picked up by greetd/tuigreet)
+# ---------------------------------------------------------------------------
+
+step "Installing Wayland session descriptors"
+
+install -Dm644 "$SCRIPT_DIR/sessions/steam.desktop" \
+    /usr/share/wayland-sessions/steam.desktop
+info "  /usr/share/wayland-sessions/steam.desktop"
+
+install -Dm644 "$SCRIPT_DIR/sessions/desktop.desktop" \
+    /usr/share/wayland-sessions/desktop.desktop
+info "  /usr/share/wayland-sessions/desktop.desktop"
+
+# ---------------------------------------------------------------------------
+# 4b. River configuration
+# ---------------------------------------------------------------------------
+
+step "Installing River configuration for $GAMING_USER"
+
+GAMING_HOME=$(eval echo ~"$GAMING_USER")
+GAMING_GROUP=$(id -gn "$GAMING_USER")
+install -Dm755 "$SCRIPT_DIR/config/river/init" \
+    "$GAMING_HOME/.config/river/init"
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/river/init"
+info "  $GAMING_HOME/.config/river/init"
 
 # ---------------------------------------------------------------------------
 # 5. User groups
@@ -245,16 +307,16 @@ echo "    - Early NVIDIA module loading (mkinitcpio change)"
 echo "    - Group membership changes for $GAMING_USER"
 echo ""
 echo "  After rebooting:"
-echo "    1. Select 'Steam Gaming Session' from tuigreet"
-echo "    2. Allow Steam to update on first launch"
+echo "    1. Select 'Steam' or 'Desktop' from tuigreet"
+echo "    2. Allow Steam to update on first launch (Steam session only)"
 echo "    3. In Steam Settings > Compatibility:"
 echo "         Enable 'Steam Play for all titles'"
 echo "         Select Proton Experimental or latest stable"
 echo "    4. In Steam Settings > Controller:"
 echo "         Enable controller configuration support"
 echo ""
-echo "  ANTI-FLICKER:"
-echo "    If flickering occurs after reboot, edit:"
-echo "      /usr/local/bin/steam-session.sh"
-echo "    Comment out --adaptive-sync and/or --immediate-flips"
+echo "  If you need to troubleshoot, check:"
+echo "    - Kernel logs: dmesg | grep -i nvidia"
+echo "    - Session logs: journalctl --user -u greetd -b | grep steam"
+echo "    - For detailed session logging, uncomment 'exec 1>/tmp/steam-session.log' in start-steam"
 echo ""

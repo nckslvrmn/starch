@@ -1,0 +1,4 @@
+[Desktop Entry]
+Name=Desktop
+Exec=/usr/local/bin/start-river
+Type=Application

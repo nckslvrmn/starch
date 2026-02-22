@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# launch terminal automatically
+/usr/bin/ghostty &
+
+riverctl map normal Alt Shift Tab focus-prev
+riverctl map normal Alt Tab focus-next
+riverctl map normal Alt Tab zoom
+riverctl map normal Super Space spawn dmenu_run
+riverctl map normal Super+Shift E exit

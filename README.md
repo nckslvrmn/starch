@@ -1,37 +1,91 @@
 # starch
 
-Minimal SteamOS-like console session for Arch Linux with NVIDIA discrete GPU.
+Post-OS setup for gaming and desktop on Arch Linux with NVIDIA discrete GPU.
+Includes a SteamOS-like console session (`start-steam`) and River window manager configuration.
 
 **Hardware target:** Lenovo Legion Pro 7 Gen 8 (Intel 13900HX + RTX 4090 Mobile)
-**Prerequisites:** Arch base, greetd + tuigreet + seatd, nvidia-open, River session working
+
+---
+
+## Prerequisites (Base System Setup)
+
+This script assumes you have a **working Arch Linux base** with the following **already in place**:
+
+### Required
+- **Base Arch install** with `base linux linux-headers`
+- **NVIDIA driver** installed and working (`nvidia-open` recommended for modern cards)
+- **NVIDIA kernel module loaded** with `nvidia_drm.modeset=1` (in kernel parameters)
+- **BIOS set to Discrete GPU Only** (not Hybrid mode)
+- **Display manager** with Wayland session support (tested with `greetd` + `tuigreet`)
+- **Session manager** for seat/VT management (`seatd` for Wayland)
+- **User account** with sudo access
+
+### Optional but Recommended
+- **paru** — AUR helper for optional packages (if not present, install will warn but continue)
+- **Git** — for cloning this repo and fetching helper scripts
+- **systemd-boot** — for managing kernel parameters (or any other UEFI bootloader)
+
+### Typical Base Install Flow
+1. Install Arch base: `pacstrap -K /mnt base linux linux-headers`
+2. Install bootloader and set `nvidia_drm.modeset=1` kernel parameter
+3. Install NVIDIA driver: `pacman -S nvidia-open`
+4. Install display/session managers: `pacman -S greetd tuigreet seatd`
+5. Create your user account and add to sudoers
+6. Clone this repo and run `sudo bash install.sh`
 
 ---
 
 ## What this does
 
-Installs a second Wayland session alongside River that launches `gamescope → Steam`
-in Big Picture mode, going direct to DRM with no parent compositor. The result is a
-couch-friendly, controller-first experience on bare metal — as close to SteamOS as
-you can get on a standard Arch install.
+Sets up the complete post-OS configuration for this machine:
+
+1. **Steam** — A Wayland session that launches `gamescope → Steam` in Big Picture mode, taking direct DRM ownership for a couch-friendly, controller-first experience on bare metal.
+
+2. **River window manager** — Tiling Wayland compositor with configuration for dual-GPU laptop usage (integrated for desktop/browser, discrete for games).
+
+3. **System configuration** — NVIDIA module options, udev rules, sysctl tweaks, gamemode config.
 
 ```
-tuigreet
-├── River          (existing desktop session)
-└── Steam Gaming Session   ← this project adds this
-        └── gamescope --backend drm
-                └── steam -tenfoot -steamos3
+tuigreet / login
+├── River          (window manager + desktop environment)
+└── Steam
+        └── gamescope (fullscreen Wayland server)
+                └── steam -gamepadui
 ```
 
 ---
 
-## Quick start
+## Quick Start
+
+**Prerequisites:** You have a working Arch Linux base install with NVIDIA driver, greetd, and seatd (see [Prerequisites](#prerequisites-base-system-setup) above).
 
 ```bash
-git clone <this-repo> starch
+# 1. Clone this repo
+git clone https://github.com/your-username/starch.git
 cd starch
+
+# 2. (Optional) Review what will be installed
+cat README.md
+
+# 3. Run the installer as root
+# It will ask for your username to configure for gaming
 sudo bash install.sh
-# reboot
+
+# 4. Reboot
+sudo reboot
+
+# 5. At tuigreet, select either:
+#    - "Steam" for gaming
+#    - "Desktop" for River window manager
 ```
+
+The installer will:
+- Install packages via pacman and optionally paru (AUR)
+- Deploy NVIDIA, gamemode, sysctl, and udev configurations
+- Install start-steam and start-river launcher scripts
+- Create Wayland session files for greetd/tuigreet
+- Configure your user's River configuration
+- Fetch SteamOS compatibility helpers from the upstream guide repo
 
 ---
 
@@ -40,142 +94,113 @@ sudo bash install.sh
 ```
 starch/
 ├── README.md
-├── install.sh                          — package install + config deploy (run as root)
+├── install.sh                                     — Installer (run as root)
 ├── scripts/
-│   └── steam-session.sh               — gamescope+Steam launcher
+│   ├── start-steam                              — gamescope+Steam launcher
+│   └── start-river                              — River window manager launcher
 ├── sessions/
-│   └── steam-gaming.desktop           — Wayland session descriptor for tuigreet
+│   ├── steam.desktop                     — Wayland session for tuigreet
+│   └── desktop.desktop                          — Desktop (River) session for tuigreet
+├── config/
+│   └── river/init                               — River keybindings + workspace config
 └── etc/
-    ├── modprobe.d/nvidia.conf          → /etc/modprobe.d/starch-nvidia.conf
-    ├── mkinitcpio.conf.d/nvidia.conf   → /etc/mkinitcpio.conf.d/starch-nvidia.conf
-    ├── udev/rules.d/70-gaming.conf     → /etc/udev/rules.d/70-starch-gaming.rules
-    ├── sysctl.d/99-gaming.conf         → /etc/sysctl.d/99-starch-gaming.conf
-    └── gamemode.ini                    → /etc/gamemode.ini
+    ├── greetd/config.toml                       → /etc/greetd/config.toml
+    ├── gamemode.ini                             → /etc/gamemode.ini
+    ├── modprobe.d/nvidia.conf                   → /etc/modprobe.d/starch-nvidia.conf
+    ├── mkinitcpio.conf.d/nvidia.conf            → /etc/mkinitcpio.conf.d/starch-nvidia.conf
+    ├── sysctl.d/99-gaming.conf                  → /etc/sysctl.d/99-starch-gaming.conf
+    └── udev/rules.d/70-gaming.conf              → /etc/udev/rules.d/70-starch-gaming.rules
+
+## What gets installed where
+
+| Source | Destination | Purpose |
+|--------|-------------|---------|
+| `scripts/start-steam` | `/usr/local/bin/start-steam` | Gaming session launcher |
+| `scripts/start-river` | `/usr/local/bin/start-river` | Desktop session launcher |
+| `sessions/*.desktop` | `/usr/share/wayland-sessions/` | Registered sessions for tuigreet |
+| `config/river/init` | `~$USER/.config/river/init` | River keybindings for gaming user |
+| `etc/greetd/config.toml` | `/etc/greetd/config.toml` | Login manager config |
+| `etc/gamemode.ini` | `/etc/gamemode.ini` | Gamemode daemon config |
+| `etc/modprobe.d/nvidia.conf` | `/etc/modprobe.d/starch-nvidia.conf` | NVIDIA driver options |
+| `etc/mkinitcpio.conf.d/nvidia.conf` | `/etc/mkinitcpio.conf.d/starch-nvidia.conf` | Early module loading |
+| `etc/sysctl.d/99-gaming.conf` | `/etc/sysctl.d/99-starch-gaming.conf` | Kernel tuning |
+| `etc/udev/rules.d/70-gaming.conf` | `/etc/udev/rules.d/70-starch-gaming.rules` | Input device permissions |
+| (cloned from upstream) | `/usr/local/bin/steamos-*` | SteamOS compatibility stubs |
 ```
 
 ---
 
-## Step-by-step (manual)
+## Installation Details
 
-### 1. Verify BIOS and kernel parameter
+The `install.sh` script handles all setup automatically. Here's what it does step-by-step:
 
-In BIOS: GPU mode must be **Discrete GPU Only** (not Hybrid).
-In your systemd-boot loader entry: confirm `nvidia_drm.modeset=1` is present.
+### 1. Preflight Checks
+- Verifies running as root
+- Confirms the target user exists
+- Checks for paru (AUR helper) — warns if missing but continues
 
-```bash
-cat /sys/module/nvidia_drm/parameters/modeset   # should print Y
-```
+### 2. Package Installation
+Installs via pacman (and paru for AUR packages):
+- **Core:** gamescope, steam, nvidia drivers, Vulkan support, Wayland/X11 libs
+- **Audio:** pipewire, wireplumber, pipewire-pulse, pipewire-alsa
+- **Gaming:** gamemode, mangohud, libdrm
+- **Optional (AUR):** xpadneo-dkms for Xbox controller support
 
-### 2. Install packages
+See the `install.sh` PACKAGES array for the full list.
 
-```bash
-sudo pacman -S --needed \
-    gamescope steam lib32-nvidia-utils \
-    vulkan-icd-loader lib32-vulkan-icd-loader lib32-mesa \
-    xorg-xwayland \
-    gamemode lib32-gamemode \
-    mangohud lib32-mangohud \
-    pipewire pipewire-pulse pipewire-alsa lib32-pipewire wireplumber \
-    libdrm
-```
+### 3. System Configuration
+Deploys to `/etc/`:
+- **NVIDIA module options:** early loading, suspend preservation, GBM backend config
+- **udev rules:** input device and uinput permissions
+- **sysctl tweaks:** swappiness, inotify limits, memory mapping
+- **Gamemode config:** NVIDIA power settings
+- **greetd config:** login manager with tuigreet
 
-**Optional — better Xbox controller support (AUR):**
-```bash
-yay -S xpadneo-dkms
-```
-PS4/PS5 (DualShock 4, DualSense) and generic HID gamepads work out of the box via
-kernel modules (`hid-playstation`, `hid-generic`). Xbox controllers work via the
-built-in `xpad` module. `xpadneo` adds proper rumble, adaptive triggers, and
-improved Bluetooth reliability for Xbox controllers.
+### 4. User Group Configuration
+Adds gaming user to: `input`, `video`, `audio`, `seat`, `gamemode`
 
-### 3. Deploy config files
+These grants access to:
+| Group | Access |
+|-------|--------|
+| `input` | Raw gamepad events and uinput (virtual controllers) |
+| `video` | DRM/KMS display devices |
+| `audio` | Audio devices (supplements Pipewire) |
+| `seat` | Session/VT management (needed for Wayland) |
+| `gamemode` | Request performance profile changes |
 
-```bash
-# NVIDIA module options
-sudo install -Dm644 etc/modprobe.d/nvidia.conf /etc/modprobe.d/starch-nvidia.conf
+### 5. uinput Module
+Loads immediately and persists via `/etc/modules-load.d/starch-uinput.conf`
 
-# Early module loading
-sudo install -Dm644 etc/mkinitcpio.conf.d/nvidia.conf /etc/mkinitcpio.conf.d/starch-nvidia.conf
+### 6. NVIDIA Power Management Services
+Enables `nvidia-suspend`, `nvidia-hibernate`, `nvidia-resume` (required for suspend-to-RAM safety)
 
-# Input device udev rules
-sudo install -Dm644 etc/udev/rules.d/70-gaming.conf /etc/udev/rules.d/70-starch-gaming.rules
+### 7. Initramfs Rebuild
+Runs `mkinitcpio -P` to apply early NVIDIA module loading
 
-# Sysctl tweaks
-sudo install -Dm644 etc/sysctl.d/99-gaming.conf /etc/sysctl.d/99-starch-gaming.conf
+### 8. Helper Scripts
+Clones and installs SteamOS compatibility stubs from upstream guide repo
 
-# Gamemode config
-sudo install -Dm644 etc/gamemode.ini /etc/gamemode.ini
-```
+### 9. First Launch (After Reboot)
 
-### 4. Install the session launcher
-
-```bash
-sudo install -Dm755 scripts/steam-session.sh /usr/local/bin/steam-session.sh
-sudo install -Dm644 sessions/steam-gaming.desktop /usr/share/wayland-sessions/steam-gaming.desktop
-```
-
-### 5. User groups
-
-```bash
-sudo usermod -aG input,video,audio,seat,gamemode YOUR_USERNAME
-```
-
-Group purposes:
-| Group | Why |
-|---|---|
-| `input` | raw input device access (gamepad events, uinput) |
-| `video` | DRM/KMS device access |
-| `audio` | audio device access (supplement to Pipewire) |
-| `seat` | seatd session management (already needed for River) |
-| `gamemode` | allowed to request gamemode optimizations |
-
-### 6. uinput module
-
-```bash
-sudo modprobe uinput
-echo "uinput" | sudo tee /etc/modules-load.d/starch-uinput.conf
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
-
-### 7. NVIDIA power management services
-
-Required if you ever suspend the system (prevents VRAM corruption on wake).
-The `NVreg_PreserveVideoMemoryAllocations=1` modprobe option only works correctly
-when these services are enabled:
-
-```bash
-sudo systemctl enable nvidia-suspend nvidia-hibernate nvidia-resume
-```
-
-### 8. Rebuild initramfs
-
-```bash
-sudo mkinitcpio -P
-```
-
-### 9. Reboot
-
-```bash
-sudo reboot
-```
-
-### 10. First launch
-
-1. At tuigreet, select **Steam Gaming Session**
-2. Let Steam update (first run only — may take a few minutes)
-3. In Steam **Settings → Compatibility**: enable Steam Play for all titles, choose Proton
-4. In Steam **Settings → Controller**: enable controller layout support
+At tuigreet, select **Steam**:
+1. Let Steam update on first run (may take a few minutes)
+2. **Settings → Compatibility:** Enable Steam Play for all titles, select Proton version
+3. **Settings → Controller:** Enable controller configuration support
+4. **Settings → Display:** Disable VSync if you have frame rate issues
+5. Update driver and Proton via Steam if prompted
 
 ---
 
 ## Architecture: why these choices
 
-### gamescope `--backend drm`
+### gamescope as DRM master
 
-`cage` and other Wayland compositors act as *clients* — they need a parent Wayland
-server to connect to. `gamescope --backend drm` is a full DRM/KMS client, meaning
-it takes exclusive ownership of the display hardware directly, just like a traditional
-X server would. This is why cage fails in a bare greetd session.
+gamescope takes direct ownership of the display hardware via DRM/KMS, eliminating
+the need for an intermediate compositor (like cage). This provides:
+- Lower latency and fewer composition layers
+- Direct KMS scanout via fullscreen flag (`-f`)
+- Stable, flicker-free rendering on NVIDIA discrete GPU
+- Simpler architecture with fewer failure points
 
 ### Early NVIDIA module loading
 
@@ -219,13 +244,13 @@ this variable.
    # Should show nvidia_drm loaded (not just nvidia)
    ```
 
-2. Try disabling VRR/immediate flips in `/usr/local/bin/steam-session.sh`:
+2. Try disabling VRR/immediate flips in `/usr/local/bin/start-steam`:
    comment out `--adaptive-sync` and `--immediate-flips`
 
 3. Check which DRM device gamescope is using — the session script logs this:
    ```bash
    journalctl --user -u greetd -b | grep "steam-session"
-   # or check output in /tmp/steam-session.log if you redirect there
+   # or enable logging in scripts/start-steam by uncommenting exec 1>/tmp/steam-session.log
    ```
 
 4. Verify NVIDIA owns the display:
@@ -284,9 +309,31 @@ this variable.
 To verify NVIDIA Vulkan is being used and monitor frame times:
 
 ```bash
-# Edit /usr/local/bin/steam-session.sh and add before the exec line:
+# Edit scripts/start-steam and add before the exec line:
 export MANGOHUD=1
 export MANGOHUD_CONFIG=fps,frametime,gpu_name,gpu_load,vram,cpu_load,ram
 ```
 
 Or enable it per-game in Steam launch options: `MANGOHUD=1 %command%`
+
+---
+
+## Attribution
+
+This project includes SteamOS compatibility helper scripts from [shahnawazshahin/steam-using-gamescope-guide](https://github.com/shahnawazshahin/steam-using-gamescope-guide), cloned during installation to provide stubs for system update checks and BIOS updates. These scripts are essential for Steam's SteamOS compatibility features to work correctly.
+
+---
+
+## Adding your own configurations
+
+This repo is organized to support multiple subsystems:
+
+- **Gaming session**: `scripts/start-steam` + `sessions/steam.desktop`
+- **Desktop session (River)**: `scripts/start-river` + `config/river/` (add these yourself)
+- **System configs**: Files in `etc/` get deployed to `/etc/` and `/etc/modprobe.d/`, etc.
+
+To add a new session or script:
+1. Create the script in `scripts/`
+2. Create a `.desktop` file in `sessions/` if it needs to appear in login managers
+3. Add deployment instructions to `install.sh`
+4. Document in this README
