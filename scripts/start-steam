@@ -1,5 +1,5 @@
 #!/bin/bash
-# start-steam — Minimal gamescope + Steam launcher for NVIDIA discrete GPU mode
+# start-steam — Minimal gamescope + Steam launcher
 #
 # Deploy:
 #   sudo install -Dm755 scripts/start-steam /usr/local/bin/start-steam
@@ -14,98 +14,164 @@ set -uo pipefail
 # exec 1>/tmp/steam-session.log 2>&1
 
 # ---------------------------------------------------------------------------
-# Phase 1: Dynamic device and display detection
+# Phase 1: GPU and display detection
 # ---------------------------------------------------------------------------
 
-# Find the NVIDIA DRM card device (PCI vendor 0x10de).
-# Default to card1 — on single-GPU laptops in discrete-only mode, the
-# simpledrm framebuffer claims card0 leaving card1 for the NVIDIA GPU.
-DRM_DEVICE="/dev/dri/card1"
+# Find the GPU DRM card device by PCI vendor:
+#   0x10de = NVIDIA   0x1002 = AMD
+GPU_VENDOR="unknown"
+DRM_DEVICE="/dev/dri/card1"  # fallback
 for card in /sys/class/drm/card[0-9]; do
-    if [ "$(cat "$card/device/vendor" 2>/dev/null)" = "0x10de" ]; then
-        DRM_DEVICE="/dev/dri/$(basename "$card")"
-        break
-    fi
+    vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
+    case "$vendor" in
+        0x10de) GPU_VENDOR="nvidia"; DRM_DEVICE="/dev/dri/$(basename "$card")"; break ;;
+        0x1002) GPU_VENDOR="amd";    DRM_DEVICE="/dev/dri/$(basename "$card")"; break ;;
+    esac
 done
 
-# Find the connected internal eDP display output
-OUTPUT_NAME="eDP-1"  # fallback
-for conn in /sys/class/drm/card*-eDP-*; do
-    if [ "$(cat "$conn/status" 2>/dev/null)" = "connected" ]; then
-        OUTPUT_NAME=$(basename "$conn" | sed 's/^card[0-9]*-//')
-        break
-    fi
+# Find the active connected output for diagnostic logging.
+# NVIDIA: prefer internal eDP panel. AMD: prefer external HDMI/DP (laptop uses HDMI out only).
+CARD_NAME=$(basename "$DRM_DEVICE")
+OUTPUT_NAME=""
+
+if [ "$GPU_VENDOR" = "amd" ]; then
+    preferred_patterns="HDMI-A-* DP-*"
+else
+    preferred_patterns="eDP-*"
+fi
+
+for pattern in $preferred_patterns; do
+    for conn in /sys/class/drm/${CARD_NAME}-${pattern}; do
+        [ -f "$conn/status" ] || continue
+        [ "$(cat "$conn/status" 2>/dev/null)" = "connected" ] || continue
+        OUTPUT_NAME=$(basename "$conn" | sed "s/^${CARD_NAME}-//")
+        break 2
+    done
 done
 
-# Get native resolution and refresh via kmsprint (included in libdrm).
-# Example kmsprint Crtc line: "    Crtc 0 2560x1600@165.00"
-KMSPRINT=$(kmsprint 2>/dev/null || true)
-CRTC_LINE=$(echo "$KMSPRINT" | grep -A3 "$OUTPUT_NAME" | grep "Crtc" || true)
-RESOLUTION=$(echo "$CRTC_LINE" | grep -oP '\d+x\d+' | head -1 || true)
-REFRESH=$(echo "$CRTC_LINE" | grep -oP '(?<=@)\d+' | head -1 || true)
-WIDTH="${RESOLUTION%%x*}"
-HEIGHT="${RESOLUTION##*x}"
+# Fall back to any connected output on this card
+if [ -z "$OUTPUT_NAME" ]; then
+    for conn in /sys/class/drm/${CARD_NAME}-*; do
+        [ -f "$conn/status" ] || continue
+        [ "$(cat "$conn/status" 2>/dev/null)" = "connected" ] || continue
+        OUTPUT_NAME=$(basename "$conn" | sed "s/^${CARD_NAME}-//")
+        break
+    done
+fi
 
-# Fallbacks if detection failed
-WIDTH="${WIDTH:-2560}"
-HEIGHT="${HEIGHT:-1600}"
-REFRESH="${REFRESH:-165}"
+OUTPUT_NAME="${OUTPUT_NAME:-unknown}"
 
+echo "[steam-session] GPU vendor : $GPU_VENDOR"
 echo "[steam-session] DRM device : $DRM_DEVICE"
 echo "[steam-session] Output     : $OUTPUT_NAME"
-echo "[steam-session] Resolution : ${WIDTH}x${HEIGHT}@${REFRESH}Hz"
 echo "[steam-session] gamescope  : $(gamescope --version 2>&1 | head -1)"
 echo ""
-echo "[steam-session] Starting session in 3s..."
-echo ""
-sleep 3
 
-# Verify the DRM device actually exists before handing off to gamescope
+# ---------------------------------------------------------------------------
+# Phase 2: Wait for DRM to be ready
+#
+# Replaces the old static `sleep 3`. Polls sysfs until:
+#   1. The DRM device node is writable (kernel driver has claimed it)
+#   2. At least one connected connector is visible on this card
+#
+# This fires as soon as NVIDIA (or AMD) DRM finishes initializing,
+# typically well under a second on a normal boot, but handles slow init too.
+# ---------------------------------------------------------------------------
+
+wait_drm_ready() {
+    local device="$1"
+    local card="$2"
+    local deadline=$(( $(date +%s) + 30 ))
+
+    printf "[steam-session] Waiting for DRM"
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if [ -w "$device" ] && \
+           grep -ql "^connected$" /sys/class/drm/${card}-*/status 2>/dev/null; then
+            echo " — ready"
+            return 0
+        fi
+        printf "."
+        sleep 0.2
+    done
+    echo " — timed out after 30s (proceeding anyway)"
+}
+
+wait_drm_ready "$DRM_DEVICE" "$CARD_NAME"
+
 if [ ! -e "$DRM_DEVICE" ]; then
     echo "[steam-session] ERROR: DRM device $DRM_DEVICE not found. Aborting."
     exit 1
 fi
 
+# Find the highest refresh rate advertised for the connected output.
+# Done after wait_drm_ready so kmsprint can query a fully initialized DRM stack.
+# kmsprint (from libdrm) lists every mode for each connector, e.g.:
+#   Connector 0 (eDP-1) connected
+#     Mode: 2560x1600@165.00 (preferred, active)
+#     Mode: 2560x1600@120.00
+# awk scans only the section for OUTPUT_NAME and picks the max integer Hz.
+REFRESH=0
+if [ "$OUTPUT_NAME" != "unknown" ] && command -v kmsprint &>/dev/null; then
+    REFRESH=$(kmsprint 2>/dev/null | awk -v out="$OUTPUT_NAME" '
+        $0 ~ out                               { in_section = 1 }
+        in_section && /Connector/ && $0 !~ out { in_section = 0 }
+        in_section && match($0, /@([0-9]+)/, m) && m[1]+0 > max { max = m[1]+0 }
+        END { if (max) print max }
+    ')
+    REFRESH="${REFRESH:-0}"
+fi
+
+if [ "$REFRESH" != "0" ]; then
+    echo "[steam-session] Max refresh: ${REFRESH}Hz"
+else
+    echo "[steam-session] Max refresh: not detected — gamescope will auto-select"
+fi
+
 # ---------------------------------------------------------------------------
-# Phase 2: Environment
+# Phase 3: Environment — GPU-specific
 # ---------------------------------------------------------------------------
 
-# NVIDIA GBM/GLX backend for gamescope's DRM master
-export GBM_BACKEND=nvidia-drm
-export __GLX_VENDOR_LIBRARY_NAME=nvidia
-
-# VA-API hardware video decode via NVIDIA NVDEC
-export LIBVA_DRIVER_NAME=nvidia
-export NVD_BACKEND=direct
-
-# Prevent hardware cursor rendering issues on NVIDIA/Wayland
-export WLR_NO_HARDWARE_CURSORS=1
-
-# Ensure NVIDIA EGL vendor is used for GBM buffer allocation inside cage/wlroots
-export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
-
-# gamescope will use this DRM device as master
-# (WLR_DRM_DEVICES still set in case future versions need it)
+# Tell gamescope which DRM device to use as master
 export WLR_DRM_DEVICES="$DRM_DEVICE"
 
-# Session type — tell Steam and Proton we are on Wayland
+# Session type
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=gamescope
 
-# Steam / Proton performance
-export PROTON_ENABLE_NVAPI=1      # Enable DLSS, Reflex, NVAPI features
-export DXVK_ASYNC=1               # Async pipeline compilation (reduces stutter)
-export STEAM_RUNTIME_HEAVY=1      # Use Steam Runtime with full compat libs
+case "$GPU_VENDOR" in
+    nvidia)
+        # GBM/GLX/EGL backend for NVIDIA
+        export GBM_BACKEND=nvidia-drm
+        export __GLX_VENDOR_LIBRARY_NAME=nvidia
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
-# Use implicit sync for gamescope's internal wlserver (for Steam/game clients).
-# Prevents buffer sync artifacts on NVIDIA with some driver versions.
-export ENABLE_IMPLICIT_SYNC=1
+        # VA-API hardware video decode via NVDEC
+        export LIBVA_DRIVER_NAME=nvidia
+        export NVD_BACKEND=direct
 
-# gamemode is now managed via systemctl --user enable gamemoded
-# (started outside this script, no need for dbus-run-session wrapper)
+        # Prevent hardware cursor artifacts on NVIDIA/Wayland
+        export WLR_NO_HARDWARE_CURSORS=1
+
+        # Buffer sync compatibility with some driver versions
+        export ENABLE_IMPLICIT_SYNC=1
+
+        # Enable DLSS, Reflex, NVAPI features in Proton
+        export PROTON_ENABLE_NVAPI=1
+        ;;
+    amd)
+        # VA-API via Mesa radeonsi (iGPU / RDNA)
+        export LIBVA_DRIVER_NAME=radeonsi
+        ;;
+esac
+
+# Async shader compilation — reduces stutter on both NVIDIA and AMD
+export DXVK_ASYNC=1
+
+# Full Steam Runtime with compat libs
+export STEAM_RUNTIME_HEAVY=1
 
 # ---------------------------------------------------------------------------
-# Phase 3: Audio — start each daemon only if not already running
+# Phase 4: Audio — start each daemon only if not already running
 # ---------------------------------------------------------------------------
 
 if ! pgrep -u "$USER" -x pipewire &>/dev/null; then
@@ -125,33 +191,33 @@ if ! pgrep -u "$USER" -x pipewire-pulse &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4: gamescope → Steam (DRM master mode)
-# ---------------------------------------------------------------------------
-# gamescope takes DRM master directly and runs Steam as a fullscreen client.
-# This is simpler and more stable than the cage intermediate compositor.
+# Phase 5: gamescope → Steam (DRM master mode)
 #
-# gamescope flags (DRM master mode):
-#   --backend wayland : Use Wayland backend
+# gamescope takes DRM master directly and auto-detects resolution from the
+# connector's EDID preferred mode. We pass -r (target framerate) when we
+# can detect it, to ensure gamescope doesn't cap at 60fps on a 165Hz display
+# whose EDID preferred mode isn't the highest refresh.
+#
+# gamescope flags:
+#   --backend wayland : wlroots Wayland rendering backend
 #   --steam           : Steam overlay and IPC integration
-#   -f                : Enable fullscreen, direct KMS scanout
-#   -W / -H           : Output surface resolution
-#   -r                : Target refresh rate
+#   -f                : Fullscreen / direct KMS scanout
+#   -r                : Target framerate (= max display refresh, if detected)
 #   --rt              : Realtime compositor thread priority
-#
-# Steam flags:
-#   -gamepadui : Big Picture / gamepad UI mode
+# ---------------------------------------------------------------------------
 
 echo "[steam-session] Launching gamescope → steam..."
-echo "[steam-session]   device   : $DRM_DEVICE"
-echo "[steam-session]   output   : $OUTPUT_NAME"
-echo "[steam-session]   res      : ${WIDTH}x${HEIGHT}@${REFRESH}Hz"
+echo "[steam-session]   device : $DRM_DEVICE"
+echo "[steam-session]   output : $OUTPUT_NAME"
 echo ""
 
-exec gamescope \
-    --backend wayland \
-    --steam \
-    -f \
-    -W "$WIDTH" -H "$HEIGHT" \
-    -r "$REFRESH" \
-    --rt \
-    -- steam -gamepadui
+GAMESCOPE_ARGS=(
+    --backend wayland
+    --steam
+    -f
+    --rt
+)
+
+[ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=( -r "$REFRESH" )
+
+exec gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui

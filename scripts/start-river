@@ -1,7 +1,30 @@
 #!/bin/sh
 
+# Detect GPU vendor for driver-specific hints
+GPU_VENDOR=""
+for card in /sys/class/drm/card[0-9]; do
+    vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
+    case "$vendor" in
+        0x10de) GPU_VENDOR="nvidia"; break ;;
+        0x1002) GPU_VENDOR="amd";    break ;;
+    esac
+done
+
 export XDG_CURRENT_DESKTOP=river
 export MOZ_ENABLE_WAYLAND=1
 export SDL_VIDEODRIVER=wayland
+
+case "$GPU_VENDOR" in
+    nvidia)
+        export GBM_BACKEND=nvidia-drm
+        export __GLX_VENDOR_LIBRARY_NAME=nvidia
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+        export WLR_NO_HARDWARE_CURSORS=1
+        export ENABLE_IMPLICIT_SYNC=1
+        ;;
+    amd)
+        export LIBVA_DRIVER_NAME=radeonsi
+        ;;
+esac
 
 exec river

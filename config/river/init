@@ -1,10 +1,101 @@
-#!/bin/sh
+#!/bin/bash
 
-# launch terminal automatically
-/usr/bin/ghostty &
+# ---------------------------------------------------------------------------
+# Display configuration via wlr-randr
+#
+# river is the compositor here, so wlr-randr --json works.
+# Reads all connected outputs, picks the mode with the highest refresh rate,
+# and applies it.
+#
+# GPU-aware rules:
+#   NVIDIA — enable all connected outputs at highest refresh
+#   AMD    — disable internal eDP (laptop runs HDMI out only),
+#            enable external outputs at highest refresh
+# ---------------------------------------------------------------------------
+
+_detect_gpu_vendor() {
+    for card in /sys/class/drm/card[0-9]; do
+        local vendor
+        vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
+        case "$vendor" in
+            0x10de) echo "nvidia"; return ;;
+            0x1002) echo "amd";    return ;;
+        esac
+    done
+    echo "unknown"
+}
+
+_configure_displays() {
+    local gpu_vendor="$1"
+
+    if ! command -v wlr-randr >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        echo "[river/init] wlr-randr or jq not found — skipping display configuration"
+        return
+    fi
+
+    local wlr_json
+    wlr_json=$(wlr-randr --json 2>/dev/null) || {
+        echo "[river/init] wlr-randr failed — skipping display configuration"
+        return
+    }
+
+    # For each output: extract the mode with the highest refresh rate.
+    # wlr-randr reports refresh in mHz (e.g. 165000 = 165 Hz); divide by 1000.
+    # If values are already in Hz (older wlr-randr), the >1000 guard handles it.
+    while IFS=$'\t' read -r name width height refresh_mhz; do
+        local refresh_hz
+        if [ "$refresh_mhz" -gt 1000 ] 2>/dev/null; then
+            refresh_hz=$(( refresh_mhz / 1000 ))
+        else
+            refresh_hz="$refresh_mhz"
+        fi
+
+        case "$gpu_vendor" in
+            amd)
+                case "$name" in
+                    eDP*)
+                        echo "[river/init] disabling internal display: $name"
+                        wlr-randr --output "$name" --off
+                        ;;
+                    *)
+                        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz"
+                        wlr-randr --output "$name" --on \
+                            --mode "${width}x${height}@${refresh_hz}"
+                        ;;
+                esac
+                ;;
+            *)
+                echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz"
+                wlr-randr --output "$name" --on \
+                    --mode "${width}x${height}@${refresh_hz}"
+                ;;
+        esac
+    done < <(echo "$wlr_json" | jq -r '
+        .[] |
+        (.modes | max_by(.refresh)) as $m |
+        [.name,
+         ($m.width  | tostring),
+         ($m.height | tostring),
+         ($m.refresh | tostring)] |
+        @tsv
+    ')
+}
+
+GPU_VENDOR=$(_detect_gpu_vendor)
+_configure_displays "$GPU_VENDOR"
+
+# ---------------------------------------------------------------------------
+# Key bindings
+# ---------------------------------------------------------------------------
 
 riverctl map normal Alt Shift Tab focus-prev
-riverctl map normal Alt Tab focus-next
-riverctl map normal Alt Tab zoom
-riverctl map normal Super Space spawn dmenu_run
+riverctl map normal Alt Tab       focus-next
+riverctl map normal Alt Tab       zoom
+riverctl map normal Super Space   spawn dmenu_run
 riverctl map normal Super+Shift E exit
+
+# ---------------------------------------------------------------------------
+# Autostart
+# ---------------------------------------------------------------------------
+
+/usr/bin/ghostty &

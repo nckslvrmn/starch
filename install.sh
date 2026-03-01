@@ -49,7 +49,23 @@ fi
 info "Installing starch gaming session for user: $GAMING_USER"
 
 # ---------------------------------------------------------------------------
-# 1. Packages
+# 1. Detect GPU
+# ---------------------------------------------------------------------------
+
+step "Detecting GPU"
+
+INSTALL_GPU_VENDOR="unknown"
+for card in /sys/class/drm/card[0-9]; do
+    vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
+    case "$vendor" in
+        0x10de) INSTALL_GPU_VENDOR="nvidia"; break ;;
+        0x1002) INSTALL_GPU_VENDOR="amd";    break ;;
+    esac
+done
+info "Detected GPU vendor: $INSTALL_GPU_VENDOR"
+
+# ---------------------------------------------------------------------------
+# 2. Packages
 # ---------------------------------------------------------------------------
 
 step "Installing packages"
@@ -61,14 +77,9 @@ PACKAGES=(
     # Steam client
     steam
 
-    # NVIDIA userspace (32-bit libs needed for most games via Proton/WINE)
-    lib32-nvidia-utils
-
-    # Vulkan
+    # Vulkan (loader + Mesa fallback for older non-Vulkan game paths)
     vulkan-icd-loader
     lib32-vulkan-icd-loader
-
-    # Mesa 32-bit (fallback for non-Vulkan paths in older games)
     lib32-mesa
 
     # Xwayland (for X11 games running under Proton)
@@ -89,13 +100,36 @@ PACKAGES=(
     lib32-pipewire
     wireplumber
 
-    # kmsprint — used by start-steam to detect display resolution
-    libdrm
+    # Display output querying (river session display config)
+    wlr-randr
+
+    # JSON parsing for wlr-randr output in river/init
+    jq
 
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
     # better Bluetooth reliability vs the in-kernel xpad module)
     xpadneo-dkms
 )
+
+case "$INSTALL_GPU_VENDOR" in
+    nvidia)
+        PACKAGES+=(
+            # NVIDIA 32-bit userspace libs (needed by most games via Proton/WINE)
+            lib32-nvidia-utils
+        )
+        ;;
+    amd)
+        PACKAGES+=(
+            # AMD Vulkan (RADV via Mesa — preferred over AMDVLK for gaming)
+            vulkan-radeon
+            lib32-vulkan-radeon
+
+            # VA-API hardware video decode
+            libva-mesa-driver
+            lib32-libva-mesa-driver
+        )
+        ;;
+esac
 
 # paru refuses to run as root; invoke it as the gaming user.
 # -H sets HOME to the user's home so paru uses the correct cache/config.
@@ -105,20 +139,23 @@ sudo -u "$GAMING_USER" -H paru -S --needed --noconfirm --skipreview "${PACKAGES[
 info "Packages installed."
 
 # ---------------------------------------------------------------------------
-# 2. Deploy /etc configuration files
+# 3. Deploy /etc configuration files
 # ---------------------------------------------------------------------------
 
 step "Deploying /etc configuration"
 
-# NVIDIA kernel module options (fbdev, NVreg tweaks, suspend preservation)
-install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/nvidia.conf" \
-    /etc/modprobe.d/starch-nvidia.conf
-info "  /etc/modprobe.d/starch-nvidia.conf"
+# NVIDIA-only: kernel module options and early initramfs loading
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/nvidia.conf" \
+        /etc/modprobe.d/starch-nvidia.conf
+    info "  /etc/modprobe.d/starch-nvidia.conf"
 
-# Early NVIDIA module loading in initramfs
-install -Dm644 "$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf" \
-    /etc/mkinitcpio.conf.d/starch-nvidia.conf
-info "  /etc/mkinitcpio.conf.d/starch-nvidia.conf"
+    install -Dm644 "$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf" \
+        /etc/mkinitcpio.conf.d/starch-nvidia.conf
+    info "  /etc/mkinitcpio.conf.d/starch-nvidia.conf"
+else
+    info "  Skipping NVIDIA modprobe/mkinitcpio config (not an NVIDIA system)"
+fi
 
 # Input device / uinput udev rules
 install -Dm644 "$SCRIPT_DIR/etc/udev/rules.d/70-gaming.conf" \
@@ -257,21 +294,25 @@ udevadm trigger
 info "  udev rules reloaded"
 
 # ---------------------------------------------------------------------------
-# 7. NVIDIA power management services
+# 7. NVIDIA power management services (NVIDIA only)
 # ---------------------------------------------------------------------------
 
-step "Enabling NVIDIA power management services"
-# Required when NVreg_PreserveVideoMemoryAllocations=1 is set.
-# Without these, suspend/resume will corrupt VRAM and likely freeze the system.
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    step "Enabling NVIDIA power management services"
+    # Required when NVreg_PreserveVideoMemoryAllocations=1 is set.
+    # Without these, suspend/resume will corrupt VRAM and likely freeze the system.
 
-for svc in nvidia-suspend nvidia-hibernate nvidia-resume; do
-    if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
-        systemctl enable "${svc}.service"
-        info "  Enabled: ${svc}.service"
-    else
-        warn "  ${svc}.service not found — install nvidia-utils if not present"
-    fi
-done
+    for svc in nvidia-suspend nvidia-hibernate nvidia-resume; do
+        if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
+            systemctl enable "${svc}.service"
+            info "  Enabled: ${svc}.service"
+        else
+            warn "  ${svc}.service not found — install nvidia-utils if not present"
+        fi
+    done
+else
+    info "Skipping NVIDIA power management services (not an NVIDIA system)"
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Apply sysctl settings immediately (no reboot needed for these)
@@ -281,13 +322,17 @@ step "Applying sysctl settings"
 sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
 
 # ---------------------------------------------------------------------------
-# 9. Rebuild initramfs
+# 9. Rebuild initramfs (NVIDIA only — AMD drivers load automatically)
 # ---------------------------------------------------------------------------
 
-step "Rebuilding initramfs"
-info "  Running mkinitcpio -P (this will take a moment)..."
-mkinitcpio -P
-info "  Initramfs rebuilt."
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    step "Rebuilding initramfs"
+    info "  Running mkinitcpio -P (this will take a moment)..."
+    mkinitcpio -P
+    info "  Initramfs rebuilt."
+else
+    info "Skipping initramfs rebuild (not required for AMD)"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -295,17 +340,24 @@ info "  Initramfs rebuilt."
 
 echo ""
 echo "================================================================"
-info "starch installation complete!"
+info "starch installation complete! (GPU: $INSTALL_GPU_VENDOR)"
 echo "================================================================"
 echo ""
-echo "  Before rebooting, verify your systemd-boot entry contains:"
-echo "    nvidia_drm.modeset=1"
-echo "  (You indicated this is already set — just confirming.)"
-echo ""
-echo "  REBOOT to apply:"
-echo "    - Early NVIDIA module loading (mkinitcpio change)"
-echo "    - Group membership changes for $GAMING_USER"
-echo ""
+
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    echo "  Before rebooting, verify your systemd-boot entry contains:"
+    echo "    nvidia_drm.modeset=1"
+    echo ""
+    echo "  REBOOT to apply:"
+    echo "    - Early NVIDIA module loading (mkinitcpio change)"
+    echo "    - Group membership changes for $GAMING_USER"
+    echo ""
+else
+    echo "  REBOOT to apply:"
+    echo "    - Group membership changes for $GAMING_USER"
+    echo ""
+fi
+
 echo "  After rebooting:"
 echo "    1. Select 'Steam' or 'Desktop' from tuigreet"
 echo "    2. Allow Steam to update on first launch (Steam session only)"
@@ -316,7 +368,11 @@ echo "    4. In Steam Settings > Controller:"
 echo "         Enable controller configuration support"
 echo ""
 echo "  If you need to troubleshoot, check:"
-echo "    - Kernel logs: dmesg | grep -i nvidia"
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    echo "    - Kernel logs: dmesg | grep -i nvidia"
+else
+    echo "    - Kernel logs: dmesg | grep -i amdgpu"
+fi
 echo "    - Session logs: journalctl --user -u greetd -b | grep steam"
 echo "    - For detailed session logging, uncomment 'exec 1>/tmp/steam-session.log' in start-steam"
 echo ""
