@@ -106,6 +106,9 @@ PACKAGES=(
     # JSON parsing for wlr-randr output in river/init
     jq
 
+    # Brightness control (media keys in river)
+    brightnessctl
+
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
     # better Bluetooth reliability vs the in-kernel xpad module)
     xpadneo-dkms

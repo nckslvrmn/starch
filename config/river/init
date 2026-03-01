@@ -94,6 +94,26 @@ riverctl map normal Alt Tab       zoom
 riverctl map normal Super Space   spawn dmenu_run
 riverctl map normal Super+Shift E exit
 
+# Tiling (riversnap)
+riverctl map normal Super Left  spawn 'riversnap left'
+riverctl map normal Super Right spawn 'riversnap right'
+riverctl map normal Super Up    spawn 'riversnap full'
+
+# Volume (media keys)
+riverctl map normal None XF86AudioRaiseVolume  spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+'
+riverctl map normal None XF86AudioLowerVolume  spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-'
+riverctl map normal None XF86AudioMute         spawn 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle'
+
+# Brightness (media keys)
+riverctl map normal None XF86MonBrightnessUp   spawn 'brightnessctl set 5%+'
+riverctl map normal None XF86MonBrightnessDown spawn 'brightnessctl set 5%-'
+
+# ---------------------------------------------------------------------------
+# Appearance
+# ---------------------------------------------------------------------------
+
+riverctl background-color 0x000000
+
 # ---------------------------------------------------------------------------
 # Autostart
 # ---------------------------------------------------------------------------
