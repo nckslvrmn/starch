@@ -68,27 +68,36 @@ echo "[steam-session] gamescope  : $(gamescope --version 2>&1 | head -1)"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Phase 2: Wait for DRM to be ready
+# Phase 2: Wait for DRM to be ready + detect max refresh
 #
-# Replaces the old static `sleep 3`. Polls sysfs until:
-#   1. The DRM device node is writable (kernel driver has claimed it)
-#   2. At least one connected connector is visible on this card
-#
-# This fires as soon as NVIDIA (or AMD) DRM finishes initializing,
-# typically well under a second on a normal boot, but handles slow init too.
+# Uses kmsprint returning valid mode data as the readiness signal — this is
+# a stronger guarantee than checking sysfs writability alone, which can fire
+# before the driver has finished populating the mode tables. One poll solves
+# both the timing problem and the refresh detection in a single step.
 # ---------------------------------------------------------------------------
+
+REFRESH=0
 
 wait_drm_ready() {
     local device="$1"
-    local card="$2"
+    local output="$2"
     local deadline=$(( $(date +%s) + 30 ))
 
     printf "[steam-session] Waiting for DRM"
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        if [ -w "$device" ] && \
-           grep -ql "^connected$" /sys/class/drm/${card}-*/status 2>/dev/null; then
-            echo " — ready"
-            return 0
+        if [ -w "$device" ]; then
+            local result
+            result=$(kmsprint 2>/dev/null | awk -v out="$output" '
+                $0 ~ out                               { in_section = 1 }
+                in_section && /Connector/ && $0 !~ out { in_section = 0 }
+                in_section && match($0, /@([0-9]+)/, m) && m[1]+0 > max { max = m[1]+0 }
+                END { if (max) print max }
+            ')
+            if [ -n "$result" ] && [ "$result" -gt 0 ] 2>/dev/null; then
+                REFRESH="$result"
+                echo " — ready"
+                return 0
+            fi
         fi
         printf "."
         sleep 0.2
@@ -96,29 +105,11 @@ wait_drm_ready() {
     echo " — timed out after 30s (proceeding anyway)"
 }
 
-wait_drm_ready "$DRM_DEVICE" "$CARD_NAME"
+wait_drm_ready "$DRM_DEVICE" "$OUTPUT_NAME"
 
 if [ ! -e "$DRM_DEVICE" ]; then
     echo "[steam-session] ERROR: DRM device $DRM_DEVICE not found. Aborting."
     exit 1
-fi
-
-# Find the highest refresh rate advertised for the connected output.
-# Done after wait_drm_ready so kmsprint can query a fully initialized DRM stack.
-# kmsprint (from libdrm) lists every mode for each connector, e.g.:
-#   Connector 0 (eDP-1) connected
-#     Mode: 2560x1600@165.00 (preferred, active)
-#     Mode: 2560x1600@120.00
-# awk scans only the section for OUTPUT_NAME and picks the max integer Hz.
-REFRESH=0
-if [ "$OUTPUT_NAME" != "unknown" ] && command -v kmsprint &>/dev/null; then
-    REFRESH=$(kmsprint 2>/dev/null | awk -v out="$OUTPUT_NAME" '
-        $0 ~ out                               { in_section = 1 }
-        in_section && /Connector/ && $0 !~ out { in_section = 0 }
-        in_section && match($0, /@([0-9]+)/, m) && m[1]+0 > max { max = m[1]+0 }
-        END { if (max) print max }
-    ')
-    REFRESH="${REFRESH:-0}"
 fi
 
 if [ "$REFRESH" != "0" ]; then
@@ -199,7 +190,7 @@ fi
 # whose EDID preferred mode isn't the highest refresh.
 #
 # gamescope flags:
-#   --backend wayland : wlroots Wayland rendering backend
+#   --backend drm     : Take DRM master directly (standalone, no parent compositor)
 #   --steam           : Steam overlay and IPC integration
 #   -f                : Fullscreen / direct KMS scanout
 #   -r                : Target framerate (= max display refresh, if detected)
@@ -212,7 +203,7 @@ echo "[steam-session]   output : $OUTPUT_NAME"
 echo ""
 
 GAMESCOPE_ARGS=(
-    --backend wayland
+    --backend drm
     --steam
     -f
     --rt
