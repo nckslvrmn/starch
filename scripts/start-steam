@@ -113,15 +113,19 @@ if [ ! -e "$DRM_DEVICE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Best-effort refresh rate detection via kmsprint.
-# kmsprint only reports @Hz when an active Crtc exists — which requires
-# something to have already set a mode. This may or may not be the case
-# before gamescope. Tried once; if it fails, gamescope auto-selects from EDID.
+# Best-effort refresh rate detection via modetest (from libdrm).
+# modetest reads mode tables directly from DRM without needing an active Crtc.
+# Parses mode lines (#N name refresh ...) and picks the highest Hz value.
 # ---------------------------------------------------------------------------
 
-if [ "$OUTPUT_NAME" != "unknown" ] && command -v kmsprint &>/dev/null; then
-    REFRESH=$(kmsprint 2>/dev/null | grep -A5 "$OUTPUT_NAME" \
-              | grep -oP '(?<=@)\d+' | sort -n | tail -1 || true)
+REFRESH=0
+if [ "$OUTPUT_NAME" != "unknown" ] && command -v modetest &>/dev/null; then
+    REFRESH=$(modetest -D "$DRM_DEVICE" 2>/dev/null | awk -v conn="$OUTPUT_NAME" '
+        /connected/ && $0 ~ conn    { in_conn = 1 }
+        in_conn && /^[0-9]/         { in_conn = 0 }
+        in_conn && /^[[:space:]]+#/ && $3+0 > max { max = $3+0 }
+        END { if (max) printf "%d\n", max }
+    ')
     REFRESH="${REFRESH:-0}"
 fi
 
