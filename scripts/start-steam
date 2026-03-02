@@ -184,10 +184,6 @@ export STEAM_RUNTIME_HEAVY=1
 
 if ! pgrep -u "$USER" -x pipewire &>/dev/null; then
     pipewire &
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        [ -S "/run/user/$(id -u)/pipewire-0" ] && break
-        sleep 0.1
-    done
 fi
 
 if ! pgrep -u "$USER" -x wireplumber &>/dev/null; then
@@ -197,6 +193,14 @@ fi
 if ! pgrep -u "$USER" -x pipewire-pulse &>/dev/null; then
     pipewire-pulse &
 fi
+
+# Wait for wireplumber to finish connecting to pipewire before launching gamescope.
+# Without this, Steam's audio client starts before the audio graph is ready.
+# wpctl status succeeds only once wireplumber is fully initialised.
+for _ in {1..20}; do
+    wpctl status &>/dev/null && break
+    sleep 0.1
+done
 
 # ---------------------------------------------------------------------------
 # Phase 5: gamescope → Steam (DRM master mode)
