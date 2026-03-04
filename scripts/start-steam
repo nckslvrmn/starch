@@ -1,34 +1,21 @@
 #!/bin/bash
-# start-steam — Minimal gamescope + Steam launcher
-#
-# Deploy:
-#   sudo install -Dm755 scripts/start-steam /usr/local/bin/start-steam
-#
-# LOG FILE: ~/.local/share/steam-session.log
-# ---------------------------------------------------------------------------
+# start-steam — gamescope + Steam session launcher
+# Deploy: sudo install -Dm755 scripts/start-steam /usr/local/bin/start-steam
+# Log:    ~/.local/share/steam-session.log
 set -uo pipefail
-
-# ---------------------------------------------------------------------------
-# Logging — persistent file, appended each run, also goes to journal
-# ---------------------------------------------------------------------------
 
 LOGFILE="$HOME/.local/share/steam-session.log"
 mkdir -p "$(dirname "$LOGFILE")"
 exec > >(tee -a "$LOGFILE") 2>&1
 
-echo ""
-echo "========================================================================"
 echo "[steam-session] START $(date '+%Y-%m-%d %H:%M:%S')"
-echo "========================================================================"
 
 # ---------------------------------------------------------------------------
-# Phase 1: GPU and display detection
+# GPU detection
 # ---------------------------------------------------------------------------
 
-# Find the GPU DRM card device by PCI vendor:
-#   0x10de = NVIDIA   0x1002 = AMD
 GPU_VENDOR="unknown"
-DRM_DEVICE="/dev/dri/card1"  # fallback
+DRM_DEVICE="/dev/dri/card1"
 for card in /sys/class/drm/card[0-9]; do
     vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
     case "$vendor" in
@@ -37,270 +24,61 @@ for card in /sys/class/drm/card[0-9]; do
     esac
 done
 
-# Find the active connected output for diagnostic logging.
-# NVIDIA: prefer internal eDP panel. AMD: prefer external HDMI/DP (laptop uses HDMI out only).
-CARD_NAME=$(basename "$DRM_DEVICE")
-OUTPUT_NAME=""
-
-if [ "$GPU_VENDOR" = "amd" ]; then
-    preferred_patterns="HDMI-A-* DP-*"
-else
-    preferred_patterns="eDP-*"
-fi
-
-for pattern in $preferred_patterns; do
-    for conn in /sys/class/drm/${CARD_NAME}-${pattern}; do
-        [ -f "$conn/status" ] || continue
-        [ "$(cat "$conn/status" 2>/dev/null)" = "connected" ] || continue
-        OUTPUT_NAME=$(basename "$conn" | sed "s/^${CARD_NAME}-//")
-        break 2
-    done
-done
-
-# Fall back to any connected output on this card
-if [ -z "$OUTPUT_NAME" ]; then
-    for conn in /sys/class/drm/${CARD_NAME}-*; do
-        [ -f "$conn/status" ] || continue
-        [ "$(cat "$conn/status" 2>/dev/null)" = "connected" ] || continue
-        OUTPUT_NAME=$(basename "$conn" | sed "s/^${CARD_NAME}-//")
-        break
-    done
-fi
-
-OUTPUT_NAME="${OUTPUT_NAME:-unknown}"
-
-echo "[steam-session] GPU vendor : $GPU_VENDOR"
-echo "[steam-session] DRM device : $DRM_DEVICE  (writable: $([ -w "$DRM_DEVICE" ] && echo yes || echo no))"
-echo "[steam-session] Output     : $OUTPUT_NAME"
-echo "[steam-session] gamescope  : $(gamescope --version 2>&1 | head -1)"
-echo ""
+echo "[steam-session] GPU: $GPU_VENDOR  device: $DRM_DEVICE"
 
 # ---------------------------------------------------------------------------
-# Phase 2: Wait for DRM to be ready
-#
-# Polls until the EDID sysfs file for the detected output is non-empty.
-# The driver only writes this file after successfully reading the display's
-# EDID over I2C — a genuine sign of full driver initialisation, not just
-# device node existence. Fires quickly on a healthy boot (<1s typical).
-#
-# Falls back to any connected connector if the output name is unknown.
+# Refresh rate — highest mode across all connected connectors
 # ---------------------------------------------------------------------------
 
 REFRESH=0
-
-wait_drm_ready() {
-    local device="$1"
-    local card="$2"
-    local output="$3"
-    local status_path="/sys/class/drm/${card}-${output}/status"
-    local deadline=$(( $(date +%s) + 5 ))
-
-    echo "[steam-session] DRM wait: device=$device  output=$output"
-    echo "[steam-session] DRM wait: status path=$status_path"
-
-    # Note: EDID sysfs is empty on NVIDIA until a compositor takes DRM master.
-    # Use device writability + connector "connected" status instead — both are
-    # available from the moment DRM is up, without needing an active Crtc.
-    printf "[steam-session] Waiting for DRM"
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-        if [ -w "$device" ]; then
-            if [ "$output" != "unknown" ]; then
-                local cur_status
-                cur_status=$(cat "$status_path" 2>/dev/null)
-                if [ "$cur_status" = "connected" ]; then
-                    echo " — ready"
-                    return 0
-                fi
-            elif grep -ql "^connected$" /sys/class/drm/${card}-*/status 2>/dev/null; then
-                echo " — ready (fallback)"
-                return 0
-            fi
-        fi
-        printf "."
-        sleep 0.2
-    done
-
-    echo " — timed out after 5s"
-    echo "[steam-session] DRM wait: device writable=$([ -w "$device" ] && echo yes || echo no)"
-    if [ "$output" != "unknown" ]; then
-        echo "[steam-session] DRM wait: $status_path = $(cat "$status_path" 2>/dev/null || echo unavailable)"
-    fi
-    echo "[steam-session] DRM wait: connected outputs:"
-    grep -l "^connected$" /sys/class/drm/${card}-*/status 2>/dev/null | sed 's|/status$||;s|.*/||' | \
-        while read -r o; do echo "[steam-session]   $o"; done || echo "[steam-session]   (none found)"
-}
-
-wait_drm_ready "$DRM_DEVICE" "$CARD_NAME" "$OUTPUT_NAME"
-
-if [ ! -e "$DRM_DEVICE" ]; then
-    echo "[steam-session] ERROR: DRM device $DRM_DEVICE not found. Aborting."
-    exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Best-effort refresh rate detection via modetest (from libdrm).
-# modetest reads mode tables directly from DRM without needing an active Crtc.
-# Parses mode lines (#N name refresh ...) and picks the highest Hz value.
-# ---------------------------------------------------------------------------
-
-REFRESH=0
-if [ "$OUTPUT_NAME" != "unknown" ] && command -v modetest &>/dev/null; then
-    MODETEST_OUT=$(modetest -D "$DRM_DEVICE" 2>&1)
-    echo "[steam-session] modetest: $(echo "$MODETEST_OUT" | wc -l) lines of output"
-    REFRESH=$(echo "$MODETEST_OUT" | awk -v conn="$OUTPUT_NAME" '
-        /connected/ && $0 ~ conn    { in_conn = 1 }
-        in_conn && /^[0-9]/         { in_conn = 0 }
-        in_conn && /^[[:space:]]+#/ && $3+0 > max { max = $3+0 }
+if command -v modetest &>/dev/null; then
+    REFRESH=$(modetest -D "$DRM_DEVICE" 2>/dev/null | awk '
+        $3 == "connected"                              { in_conn = 1 }
+        in_conn && /^[0-9]/                            { in_conn = 0 }
+        in_conn && /^[[:space:]]+#/ && $3+0 > max     { max = $3+0 }
         END { if (max) printf "%d\n", max }
     ')
     REFRESH="${REFRESH:-0}"
-    # Log the connector section we matched for debugging
-    echo "$MODETEST_OUT" | awk -v conn="$OUTPUT_NAME" '
-        /connected/ && $0 ~ conn    { in_conn = 1; print "[steam-session] modetest connector: " $0; next }
-        in_conn && /^[[:space:]]+#/ { print "[steam-session] modetest mode: " $0 }
-        in_conn && /^[0-9]/         { in_conn = 0 }
-    '
-else
-    [ "$OUTPUT_NAME" = "unknown" ] && echo "[steam-session] modetest: skipped (output unknown)"
-    command -v modetest &>/dev/null || echo "[steam-session] modetest: binary not found"
 fi
 
-if [ "$REFRESH" != "0" ]; then
-    echo "[steam-session] Max refresh: ${REFRESH}Hz"
-else
-    echo "[steam-session] Max refresh: not detected — gamescope will auto-select"
-fi
+echo "[steam-session] Refresh: ${REFRESH}Hz"
 
 # ---------------------------------------------------------------------------
-# Phase 3: Environment — GPU-specific
+# Environment
 # ---------------------------------------------------------------------------
 
-# Tell gamescope which DRM device to use as master
 export WLR_DRM_DEVICES="$DRM_DEVICE"
-
-# Session type
-export XDG_SESSION_TYPE=wayland
-export XDG_CURRENT_DESKTOP=gamescope
-
 
 case "$GPU_VENDOR" in
     nvidia)
-        # GBM/GLX/EGL backend for NVIDIA
         export GBM_BACKEND=nvidia-drm
         export __GLX_VENDOR_LIBRARY_NAME=nvidia
         export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
-
-        # VA-API hardware video decode via NVDEC
         export LIBVA_DRIVER_NAME=nvidia
         export NVD_BACKEND=direct
-
-        # Prevent hardware cursor artifacts on NVIDIA/Wayland
         export WLR_NO_HARDWARE_CURSORS=1
-
-        # Buffer sync compatibility with some driver versions
         export ENABLE_IMPLICIT_SYNC=1
-
-        # Enable DLSS, Reflex, NVAPI features in Proton
         export PROTON_ENABLE_NVAPI=1
         ;;
     amd)
-        # VA-API via Mesa radeonsi (iGPU / RDNA)
         export LIBVA_DRIVER_NAME=radeonsi
         ;;
 esac
 
-# Async shader compilation — reduces stutter on both NVIDIA and AMD
 export DXVK_ASYNC=1
-
-# Full Steam Runtime with compat libs
 export STEAM_RUNTIME_HEAVY=1
 
 # ---------------------------------------------------------------------------
-# Phase 4: Audio — start each daemon only if not already running
+# Launch — SDDM hands off DRM master and audio (pipewire via systemd user
+# session) before this script runs, so no setup is needed here.
+# After gamescope exits, fall back to the river desktop session.
 # ---------------------------------------------------------------------------
 
-echo "[steam-session] Audio env: XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-unset}"
-echo "[steam-session] Audio env: DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unset}"
+GAMESCOPE_ARGS=(--backend wayland --steam -f --rt)
+[ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=(-r "$REFRESH")
 
-pipewire_pid=$(pgrep -u "$USER" -x pipewire  || echo none)
-wireplumber_pid=$(pgrep -u "$USER" -x wireplumber || echo none)
-pulse_pid=$(pgrep -u "$USER" -x pipewire-pulse || echo none)
-echo "[steam-session] Audio pids: pipewire=$pipewire_pid  wireplumber=$wireplumber_pid  pipewire-pulse=$pulse_pid"
-
-if [ "$pipewire_pid" = "none" ]; then
-    echo "[steam-session] Audio: starting pipewire"
-    pipewire &
-fi
-
-if [ "$wireplumber_pid" = "none" ]; then
-    echo "[steam-session] Audio: starting wireplumber"
-    wireplumber &
-fi
-
-if [ "$pulse_pid" = "none" ]; then
-    echo "[steam-session] Audio: starting pipewire-pulse"
-    pipewire-pulse &
-fi
-
-# Wait for wireplumber to finish connecting to pipewire before launching gamescope.
-# Without this, Steam's audio client starts before the audio graph is ready.
-# wpctl status succeeds only once wireplumber is fully initialised.
-echo "[steam-session] Audio: waiting for wpctl status..."
-wpctl_ready=no
-for i in {1..20}; do
-    if wpctl status &>/dev/null; then
-        echo "[steam-session] Audio: wpctl ready after ${i} attempt(s)"
-        wpctl_ready=yes
-        break
-    fi
-    sleep 0.1
-done
-if [ "$wpctl_ready" = "no" ]; then
-    echo "[steam-session] Audio: wpctl timed out — wireplumber did not initialise in 2s"
-    echo "[steam-session] Audio: wpctl stderr: $(wpctl status 2>&1 | head -5)"
-fi
-
-# ---------------------------------------------------------------------------
-# Phase 5: gamescope → Steam (DRM master mode)
-#
-# gamescope takes DRM master directly and auto-detects resolution from the
-# connector's EDID preferred mode. We pass -r (target framerate) when we
-# can detect it, to ensure gamescope doesn't cap at 60fps on a 165Hz display
-# whose EDID preferred mode isn't the highest refresh.
-#
-# gamescope flags:
-#   --backend wayland : wlroots Wayland rendering backend (no parent compositor needed)
-#   --steam           : Steam overlay and IPC integration
-#   -f                : Fullscreen / direct KMS scanout
-#   -r                : Target framerate (= max display refresh, if detected)
-#   --rt              : Realtime compositor thread priority
-#
-# After gamescope exits (exit steam / switch to desktop), launch river so
-# the user has a desktop to fall back to (exit river → back to tuigreet).
-# ---------------------------------------------------------------------------
-
-echo ""
-echo "[steam-session] Launching gamescope → steam..."
-echo "[steam-session]   device  : $DRM_DEVICE"
-echo "[steam-session]   output  : $OUTPUT_NAME"
-echo "[steam-session]   refresh : ${REFRESH}Hz"
-echo ""
-
-GAMESCOPE_ARGS=(
-    --backend wayland
-    --steam
-    -f
-    --rt
-)
-
-[ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=( -r "$REFRESH" )
-
+echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
 gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui
-GAMESCOPE_EXIT=$?
-
-echo ""
-echo "[steam-session] gamescope exited (code $GAMESCOPE_EXIT) at $(date '+%H:%M:%S')"
-echo "[steam-session] launching river desktop..."
 echo "[steam-session] END $(date '+%Y-%m-%d %H:%M:%S')"
 
 exec start-river

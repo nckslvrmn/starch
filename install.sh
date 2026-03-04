@@ -109,6 +109,9 @@ PACKAGES=(
     # Brightness control (media keys in river)
     brightnessctl
 
+    # Login / display manager
+    sddm
+
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
     # better Bluetooth reliability vs the in-kernel xpad module)
     xpadneo-dkms
@@ -175,10 +178,10 @@ install -Dm644 "$SCRIPT_DIR/etc/gamemode.ini" \
     /etc/gamemode.ini
 info "  /etc/gamemode.ini"
 
-# greetd login manager configuration (tuigreet with --time --remember --asterisks)
-install -Dm644 "$SCRIPT_DIR/etc/greetd/config.toml" \
-    /etc/greetd/config.toml
-info "  /etc/greetd/config.toml"
+# SDDM display manager — Wayland greeter mode
+install -Dm644 "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.conf" \
+    /etc/sddm.conf.d/10-wayland.conf
+info "  /etc/sddm.conf.d/10-wayland.conf"
 
 # ---------------------------------------------------------------------------
 # 3. Session launcher script
@@ -236,7 +239,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Wayland session descriptors (picked up by greetd/tuigreet)
+# 4. Wayland session descriptors (picked up by SDDM)
 # ---------------------------------------------------------------------------
 
 step "Installing Wayland session descriptors"
@@ -278,7 +281,15 @@ for group in input video audio seat gamemode; do
 done
 
 # ---------------------------------------------------------------------------
-# 6. uinput module — load immediately and persist across reboots
+# 6. Enable SDDM
+# ---------------------------------------------------------------------------
+
+step "Enabling SDDM"
+systemctl enable sddm.service
+info "  sddm.service enabled"
+
+# ---------------------------------------------------------------------------
+# 7. uinput module — load immediately and persist across reboots
 # ---------------------------------------------------------------------------
 
 step "Configuring uinput module"
@@ -297,7 +308,7 @@ udevadm trigger
 info "  udev rules reloaded"
 
 # ---------------------------------------------------------------------------
-# 7. NVIDIA power management services (NVIDIA only)
+# 8. NVIDIA power management services (NVIDIA only)
 # ---------------------------------------------------------------------------
 
 if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
@@ -318,14 +329,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Apply sysctl settings immediately (no reboot needed for these)
+# 9. Apply sysctl settings immediately (no reboot needed for these)
 # ---------------------------------------------------------------------------
 
 step "Applying sysctl settings"
 sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
 
 # ---------------------------------------------------------------------------
-# 9. Rebuild initramfs (NVIDIA only — AMD drivers load automatically)
+# 10. Rebuild initramfs (NVIDIA only — AMD drivers load automatically)
 # ---------------------------------------------------------------------------
 
 if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
@@ -362,7 +373,7 @@ else
 fi
 
 echo "  After rebooting:"
-echo "    1. Select 'Steam' or 'Desktop' from tuigreet"
+echo "    1. Select 'Steam' or 'Desktop' from SDDM"
 echo "    2. Allow Steam to update on first launch (Steam session only)"
 echo "    3. In Steam Settings > Compatibility:"
 echo "         Enable 'Steam Play for all titles'"
@@ -376,6 +387,6 @@ if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
 else
     echo "    - Kernel logs: dmesg | grep -i amdgpu"
 fi
-echo "    - Session logs: journalctl --user -u greetd -b | grep steam"
-echo "    - For detailed session logging, uncomment 'exec 1>/tmp/steam-session.log' in start-steam"
+echo "    - SDDM logs: journalctl -u sddm -b"
+echo "    - Steam session log: ~/.local/share/steam-session.log"
 echo ""
