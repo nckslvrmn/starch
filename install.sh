@@ -111,6 +111,9 @@ PACKAGES=(
 
     # Login / display manager
     sddm
+    weston          # Wayland compositor for the SDDM greeter (sddm uses weston --shell=kiosk)
+    qt6-wayland     # Qt6 Wayland platform plugin (lets sddm-greeter-qt6 run as a Wayland client)
+    qt6-svg         # SVG rendering for Qt6 (theme uses SVG icons)
 
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
     # better Bluetooth reliability vs the in-kernel xpad module)
@@ -137,12 +140,24 @@ case "$INSTALL_GPU_VENDOR" in
         ;;
 esac
 
-# paru refuses to run as root; invoke it as the gaming user.
-# -H sets HOME to the user's home so paru uses the correct cache/config.
-# --skipreview suppresses the AUR PKGBUILD diff prompt for non-interactive use.
-sudo -u "$GAMING_USER" -H paru -S --needed --noconfirm --skipreview "${PACKAGES[@]}"
+# Compute which packages aren't already installed.
+MISSING=()
+for pkg in "${PACKAGES[@]}"; do
+    pacman -Qi "$pkg" &>/dev/null || MISSING+=("$pkg")
+done
 
-info "Packages installed."
+PACKAGES_NEWLY_INSTALLED=false
+if [ ${#MISSING[@]} -gt 0 ]; then
+    info "Installing ${#MISSING[@]} missing package(s): ${MISSING[*]}"
+    # paru refuses to run as root; invoke it as the gaming user.
+    # -H sets HOME to the user's home so paru uses the correct cache/config.
+    # --skipreview suppresses the AUR PKGBUILD diff prompt for non-interactive use.
+    sudo -u "$GAMING_USER" -H paru -S --needed --noconfirm --skipreview "${MISSING[@]}"
+    PACKAGES_NEWLY_INSTALLED=true
+    info "Packages installed."
+else
+    info "All packages already present, skipping installation."
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Deploy /etc configuration files
@@ -182,6 +197,13 @@ info "  /etc/gamemode.ini"
 install -Dm644 "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.conf" \
     /etc/sddm.conf.d/10-wayland.conf
 info "  /etc/sddm.conf.d/10-wayland.conf"
+
+# SDDM theme — starch (minimal dark, prominent session selector)
+find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
+    dst="/usr/share/sddm/themes/starch/${src#$SCRIPT_DIR/etc/sddm/themes/starch/}"
+    install -Dm644 "$src" "$dst"
+    info "  $dst"
+done
 
 # ---------------------------------------------------------------------------
 # 3. Session launcher script
@@ -339,13 +361,13 @@ sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysct
 # 10. Rebuild initramfs (NVIDIA only — AMD drivers load automatically)
 # ---------------------------------------------------------------------------
 
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ] && [ "$PACKAGES_NEWLY_INSTALLED" = "true" ]; then
     step "Rebuilding initramfs"
     info "  Running mkinitcpio -P (this will take a moment)..."
     mkinitcpio -P
     info "  Initramfs rebuilt."
 else
-    info "Skipping initramfs rebuild (not required for AMD)"
+    info "Skipping initramfs rebuild (no new packages installed)"
 fi
 
 # ---------------------------------------------------------------------------
