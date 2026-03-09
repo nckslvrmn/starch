@@ -118,6 +118,9 @@ PACKAGES=(
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
     # better Bluetooth reliability vs the in-kernel xpad module)
     xpadneo-dkms
+
+    # GameCube / Wii emulator — GameCube USB adapter support configured below
+    dolphin-emu
 )
 
 case "$INSTALL_GPU_VENDOR" in
@@ -164,6 +167,12 @@ fi
 # ---------------------------------------------------------------------------
 
 step "Deploying /etc configuration"
+
+# GameCube USB adapter — prevent usbhid from claiming the device so Dolphin
+# can open it via libusb. Applied unconditionally (no GPU dependency).
+install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/gcadapter.conf" \
+    /etc/modprobe.d/starch-gcadapter.conf
+info "  /etc/modprobe.d/starch-gcadapter.conf"
 
 # NVIDIA-only: kernel module options and early initramfs loading
 if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then

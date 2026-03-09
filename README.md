@@ -17,9 +17,7 @@ This installer assumes a **working Arch Linux base** with the following **alread
 - **Base Arch install** with `base linux linux-headers`
 - **GPU driver** installed and working
   - NVIDIA: `nvidia-open` recommended for modern cards
-  - AMD: `mesa` and `xf86-video-amdgpu` (or just `mesa` — amdgpu loads automatically)
-- **Display manager** with Wayland session support (`greetd` + `tuigreet`)
-- **Session manager** for seat/VT management (`seatd`)
+  - AMD: `mesa` (amdgpu loads automatically)
 - **User account** with sudo access
 - **paru** — AUR helper (required for `xpadneo-dkms`)
 
@@ -28,7 +26,7 @@ This installer assumes a **working Arch Linux base** with the following **alread
 - **BIOS set to Discrete GPU Only** (not Hybrid/Optimus mode)
 
 ### Optional but Recommended
-- **Git** — for cloning this repo and fetching helper scripts
+- **Git** — for cloning this repo
 - **systemd-boot** — for managing kernel parameters
 
 ### Typical Base Install Flow
@@ -37,15 +35,13 @@ This installer assumes a **working Arch Linux base** with the following **alread
 1. Install Arch base: `pacstrap -K /mnt base linux linux-headers`
 2. Install bootloader and set `nvidia_drm.modeset=1` kernel parameter
 3. Install NVIDIA driver: `pacman -S nvidia-open`
-4. Install display/session managers: `pacman -S greetd tuigreet seatd`
-5. Create user, add to sudoers, install paru
-6. Clone this repo and run `sudo bash install.sh`
+4. Create user, add to sudoers, install paru
+5. Clone this repo and run `sudo bash install.sh`
 
 **AMD:**
 1. Install Arch base: `pacstrap -K /mnt base linux linux-headers mesa`
-2. Install display/session managers: `pacman -S greetd tuigreet seatd`
-3. Create user, add to sudoers, install paru
-4. Clone this repo and run `sudo bash install.sh`
+2. Create user, add to sudoers, install paru
+3. Clone this repo and run `sudo bash install.sh`
 
 ---
 
@@ -53,16 +49,19 @@ This installer assumes a **working Arch Linux base** with the following **alread
 
 Sets up the complete post-OS configuration for a gaming machine:
 
-1. **Steam session** — A Wayland session that launches `gamescope → Steam` in Big Picture mode, taking direct DRM ownership for a couch-friendly, controller-first experience on bare metal.
+1. **Steam session** — A Wayland session that launches `gamescope → Steam` in Big Picture mode with HDR enabled, taking direct DRM ownership for a couch-friendly, controller-first experience on bare metal. When exited, falls back to the River desktop session.
 
 2. **River window manager** — Tiling Wayland compositor with GPU-aware display configuration via `wlr-randr`.
 
-3. **System configuration** — GPU-specific module options, udev rules, sysctl tweaks, gamemode config.
+3. **SDDM display manager** — Runs in Wayland mode with a custom "starch" dark theme. Handles DRM master handoff, PipeWire/audio startup via systemd user session, and session selection.
+
+4. **System configuration** — GPU-specific module options, udev rules, sysctl tweaks, gamemode config, GameCube adapter support (Dolphin).
 
 ```
-tuigreet / login
+SDDM (Wayland, starch theme)
 ├── Desktop  →  start-river  →  river (+ wlr-randr display config on init)
-└── Steam    →  start-steam  →  gamescope (DRM master) → steam -gamepadui
+└── Steam    →  start-steam  →  gamescope (DRM master, HDR) → steam -gamepadui
+                                    └── (on exit) → start-river
 ```
 
 ---
@@ -81,7 +80,7 @@ sudo bash install.sh
 # 3. Reboot
 sudo reboot
 
-# 4. At tuigreet, select either:
+# 4. At SDDM, select either:
 #    - "Steam"   for the gaming session
 #    - "Desktop" for River window manager
 ```
@@ -90,7 +89,8 @@ The installer:
 - Detects your GPU (NVIDIA or AMD) and installs the appropriate packages
 - Deploys system configuration files conditionally based on GPU
 - Installs `start-steam` and `start-river` launcher scripts
-- Creates Wayland session files for greetd/tuigreet
+- Installs and enables SDDM with the custom starch theme
+- Creates Wayland session files for SDDM
 - Configures your user's River init script (with automatic display setup)
 - Fetches SteamOS compatibility helpers from the upstream guide repo
 
@@ -106,14 +106,16 @@ starch/
 │   ├── start-steam                     — gamescope+Steam session launcher
 │   └── start-river                     — River window manager launcher
 ├── sessions/
-│   ├── steam.desktop                   — "Steam" entry in tuigreet
-│   └── desktop.desktop                 — "Desktop" entry in tuigreet
+│   ├── steam.desktop                   — "Steam" entry in SDDM
+│   └── desktop.desktop                 — "Desktop" entry in SDDM
 ├── config/
 │   └── river/init                      — River display config + keybindings
 └── etc/
-    ├── greetd/config.toml              → /etc/greetd/config.toml
+    ├── sddm.conf.d/10-wayland.conf     → /etc/sddm.conf.d/10-wayland.conf
+    ├── sddm/themes/starch/             → /usr/share/sddm/themes/starch/
     ├── gamemode.ini                    → /etc/gamemode.ini
     ├── modprobe.d/nvidia.conf          → /etc/modprobe.d/starch-nvidia.conf      (NVIDIA only)
+    ├── modprobe.d/gcadapter.conf       → /etc/modprobe.d/starch-gcadapter.conf   (both)
     ├── mkinitcpio.conf.d/nvidia.conf   → /etc/mkinitcpio.conf.d/starch-nvidia.conf (NVIDIA only)
     ├── sysctl.d/99-gaming.conf         → /etc/sysctl.d/99-starch-gaming.conf
     └── udev/rules.d/70-gaming.conf     → /etc/udev/rules.d/70-starch-gaming.rules
@@ -129,8 +131,10 @@ starch/
 | `scripts/start-river` | `/usr/local/bin/start-river` | Both |
 | `sessions/*.desktop` | `/usr/share/wayland-sessions/` | Both |
 | `config/river/init` | `~$USER/.config/river/init` | Both |
-| `etc/greetd/config.toml` | `/etc/greetd/config.toml` | Both |
+| `etc/sddm.conf.d/10-wayland.conf` | `/etc/sddm.conf.d/10-wayland.conf` | Both |
+| `etc/sddm/themes/starch/` | `/usr/share/sddm/themes/starch/` | Both |
 | `etc/gamemode.ini` | `/etc/gamemode.ini` | Both |
+| `etc/modprobe.d/gcadapter.conf` | `/etc/modprobe.d/starch-gcadapter.conf` | Both |
 | `etc/modprobe.d/nvidia.conf` | `/etc/modprobe.d/starch-nvidia.conf` | NVIDIA |
 | `etc/mkinitcpio.conf.d/nvidia.conf` | `/etc/mkinitcpio.conf.d/starch-nvidia.conf` | NVIDIA |
 | `etc/sysctl.d/99-gaming.conf` | `/etc/sysctl.d/99-starch-gaming.conf` | Both |
@@ -163,6 +167,9 @@ regardless of which machine they're running on.
 - `pipewire`, `pipewire-pulse`, `pipewire-alsa`, `lib32-pipewire`, `wireplumber`
 - `wlr-randr` — display output configuration (used by river/init)
 - `jq` — JSON parsing for wlr-randr output
+- `brightnessctl` — backlight/brightness control (media keys in River)
+- `sddm`, `weston`, `qt6-wayland`, `qt6-svg` — display manager and Wayland greeter stack
+- `dolphin-emu` — GameCube/Wii emulator (GameCube USB adapter configured via modprobe)
 - `xpadneo-dkms` (AUR) — improved Xbox controller driver
 
 **NVIDIA-only packages:**
@@ -198,142 +205,105 @@ These steps are **skipped on AMD** systems:
 
 ### Steam Session (`start-steam`)
 
-**Phase 1 — GPU and display detection:**
-- Reads PCI vendor from `/sys/class/drm/card*/device/vendor` to identify GPU
-- Finds the connected output using DRM sysfs connector status files:
-  - NVIDIA: prefers `eDP-*` (internal panel)
-  - AMD: prefers `HDMI-A-*` or `DP-*` (external display — AMD laptop uses HDMI out only)
-  - Falls back to any connected output if the preferred type isn't found
+**GPU detection:**
+Reads PCI vendor from `/sys/class/drm/card*/device/vendor` to identify GPU and determine the DRM device node.
 
-**Phase 2 — DRM readiness wait:**
-Polls sysfs until two conditions are both true:
-1. The DRM device node (`/dev/dri/cardN`) is writable
-2. At least one connected connector appears on that card
+**Refresh rate detection:**
+Runs `modetest -D <drm-device>` and uses `awk` to scan connected connectors and pick the highest advertised refresh rate. Passed to gamescope as `-r` so it doesn't cap at 60fps on a high-refresh display.
 
-This replaces a static `sleep` and fires as soon as the GPU driver finishes
-initializing — typically under a second on a healthy boot, up to 30s timeout.
+**Environment:**
+Sets GPU-specific environment variables. SDDM and the systemd user session handle DRM master handoff and PipeWire/audio startup before this script runs — no manual setup needed.
 
-**Phase 3 — Max refresh detection:**
-Once DRM is ready, runs `kmsprint` (from `libdrm`) to list all advertised modes for
-the connected output. `awk` scans only that connector's section and picks the highest
-integer Hz value. This is passed to gamescope as `-r` so it doesn't cap at 60fps on
-a high-refresh display whose EDID preferred mode happens to be conservative.
+**gamescope:**
+Launches `gamescope --backend wayland --steam -f --rt --hdr-enabled [-r REFRESH] -- steam -gamepadui`.
+Resolution is auto-detected from the EDID preferred mode; `-r` is added only when successfully detected.
 
-**Phase 4 — Environment:**
-Sets GPU-specific environment variables, then starts PipeWire/WirePlumber if not
-already running.
-
-**Phase 5 — gamescope:**
-Launches `gamescope --backend wayland --steam -f --rt [-r REFRESH] -- steam -gamepadui`.
-Resolution is auto-detected by gamescope from the EDID preferred mode. `-r` is added
-only when successfully detected.
+**Fallback:**
+When the Steam session exits (e.g. via the power menu), the script falls back to `exec start-river`, dropping into the River desktop session.
 
 ### Desktop Session (`start-river`)
 
 Detects GPU vendor at launch and exports the appropriate driver hints before `exec river`:
 - NVIDIA: `GBM_BACKEND`, `__GLX_VENDOR_LIBRARY_NAME`, `__EGL_VENDOR_LIBRARY_FILENAMES`, `WLR_NO_HARDWARE_CURSORS`, `ENABLE_IMPLICIT_SYNC`
 - AMD: `LIBVA_DRIVER_NAME=radeonsi`
+- Both: `XDG_CURRENT_DESKTOP=river`, `MOZ_ENABLE_WAYLAND=1`, `SDL_VIDEODRIVER=wayland`
 
 ### River Display Configuration (`config/river/init`)
 
-Runs on every River startup. Uses `wlr-randr --json` (river is the compositor, so this
-works) combined with `jq` to find and apply the highest refresh rate mode for each
-connected output. GPU-aware rules:
+Runs on every River startup. Uses `wlr-randr --json` combined with `jq` to find and apply the
+highest refresh rate mode for each connected output. GPU-aware rules:
 - **NVIDIA**: enables all connected outputs at their highest refresh rate
-- **AMD**: disables `eDP-*` (internal panel — AMD laptop is HDMI-out only), enables
-  all external outputs at their highest refresh rate
+- **AMD**: disables `eDP-*` (internal panel — AMD laptop is HDMI-out only), enables all external outputs at their highest refresh rate
 
-The wlr-randr refresh values are in mHz as per the Wayland protocol; the init script
-converts to Hz automatically and handles both unit conventions defensively.
+The wlr-randr refresh values are in mHz as per the Wayland protocol; the init script converts to Hz automatically and handles both unit conventions defensively.
+
+### SDDM Theme (`etc/sddm/themes/starch/`)
+
+A custom minimal dark theme with prominent session and user selectors. Built in QML with SVG icons for Steam and Desktop sessions. SDDM runs in Wayland mode using weston as the greeter compositor (`weston --shell=kiosk`).
 
 ---
 
 ## Architecture: Why These Choices
 
+### SDDM as display manager
+
+SDDM in Wayland mode handles DRM master handoff to the session compositor, starts the systemd user session (which brings up PipeWire via socket activation), and provides `XDG_RUNTIME_DIR` and D-Bus. This eliminates the need for manual audio startup or DRM synchronization in session scripts — everything is ready before `start-steam` runs.
+
 ### gamescope as DRM master
 
-gamescope takes direct ownership of the display hardware via DRM/KMS, eliminating
-the need for an intermediate compositor. This provides:
+gamescope takes direct ownership of the display hardware via DRM/KMS, eliminating the need for an intermediate compositor. This provides:
 - Lower latency and fewer composition layers
 - Direct KMS scanout via fullscreen flag (`-f`)
-- Stable, flicker-free rendering
+- Stable, flicker-free rendering with HDR support (`--hdr-enabled`)
 - Simpler architecture with fewer failure points
 
-Resolution is intentionally **not** hardcoded — gamescope queries the connector's EDID
-and selects the preferred mode itself. Only `-r` (target framerate) is passed, sourced
-from the max refresh rate across all modes advertised by the display.
-
-### DRM readiness polling
-
-Without synchronization, greetd can start the session before the GPU driver has
-finished claiming the DRM device and populating connector state. The poll is cheap
-(sysfs reads, 200ms interval) and eliminates the race without an arbitrary sleep.
+Resolution is intentionally **not** hardcoded — gamescope queries the connector's EDID and selects the preferred mode itself. Only `-r` (target framerate) is passed, sourced from the max refresh rate across all modes advertised by the display.
 
 ### Smart display selection
 
-Both `start-steam` and `river/init` select the right output based on GPU type rather
-than a hardcoded name like `eDP-1`. This matters because:
+`river/init` selects the right output based on GPU type rather than a hardcoded name like `eDP-1`. This matters because:
 - The NVIDIA laptop uses an internal eDP panel; its card index isn't always 1
 - The AMD laptop uses HDMI out exclusively with the internal panel disabled
 - Future hardware may have different connector names entirely
 
 ### Early NVIDIA module loading
 
-Without the modules in the initramfs, the kernel loads them lazily. By the time
-greetd starts, the DRM device may not be fully initialized — the DRM readiness poll
-handles transient delays, but early loading reduces the window significantly.
+Without the modules in the initramfs, the kernel loads them lazily. By the time SDDM starts, the DRM device may not be fully initialized. Early loading eliminates this race entirely.
 
 ### `NVreg_PreserveVideoMemoryAllocations=1`
 
-Without this, NVIDIA flushes VRAM on suspend. On resume, the compositor has dangling
-pointers into GPU memory and typically freezes or corrupts the display. The matching
-systemd services (`nvidia-suspend`, `nvidia-resume`) handle save/restore of that state.
+Without this, NVIDIA flushes VRAM on suspend. On resume, the compositor has dangling pointers into GPU memory and typically freezes or corrupts the display. The matching systemd services (`nvidia-suspend`, `nvidia-resume`) handle save/restore of that state.
 
 ### `GBM_BACKEND=nvidia-drm`
 
-Wayland compositors use GBM to allocate shared GPU buffers. Mesa's default GBM
-implementation doesn't support NVIDIA. This routes GBM through NVIDIA's own backend.
-Not set on AMD — Mesa handles this correctly by default.
+Wayland compositors use GBM to allocate shared GPU buffers. Mesa's default GBM implementation doesn't support NVIDIA. This routes GBM through NVIDIA's own backend. Not set on AMD — Mesa handles this correctly by default.
 
 ### AMD display disable in River
 
-The AMD laptop routes all output through HDMI with the internal panel physically
-unused. `wlr-randr --output eDP-1 --off` in river/init enforces this in software
-on every compositor start, regardless of what state the DRM driver initializes to.
+The AMD laptop routes all output through HDMI with the internal panel physically unused. `wlr-randr --output eDP-1 --off` in `river/init` enforces this in software on every compositor start, regardless of what state the DRM driver initializes to.
+
+### GameCube adapter (Dolphin)
+
+`etc/modprobe.d/gcadapter.conf` prevents `usbhid` from claiming the GameCube USB adapter, allowing Dolphin to open it directly via libusb. Applied unconditionally on both GPU configurations.
 
 ---
 
 ## Troubleshooting
 
-### DRM readiness timeout
+### Session log
 
-If you see `Waiting for DRM — timed out after 30s` in the session log:
-
-```bash
-# Check if the GPU driver loaded
-lsmod | grep -E 'nvidia_drm|amdgpu'
-
-# Check DRM device permissions
-ls -la /dev/dri/
-
-# Check connector state
-cat /sys/class/drm/card*-*/status
-
-# NVIDIA: verify early loading in initramfs
-cat /etc/mkinitcpio.conf.d/starch-nvidia.conf
-```
+The Steam session logs to `~/.local/share/steam-session.log`. Check this first for any launch failures.
 
 ### Refresh rate not detected
 
-If you see `Max refresh: not detected` in the log:
+If you see `Refresh: 0Hz` in the log:
 
 ```bash
-# Verify kmsprint works
-kmsprint
+# Verify modetest works and shows your connector
+modetest -D /dev/dri/card1
 
-# Check what output name was detected (enable logging in start-steam first)
-# exec 1>/tmp/steam-session.log 2>&1  — uncomment near top of start-steam
-cat /tmp/steam-session.log
+# Check what DRM device was detected
+grep "device:" ~/.local/share/steam-session.log
 ```
 
 ### Flickering (NVIDIA)
@@ -346,7 +316,7 @@ cat /tmp/steam-session.log
    ```bash
    cat /proc/cmdline | grep nvidia_drm
    ```
-3. Enable session logging by uncommenting `exec 1>/tmp/steam-session.log 2>&1` in `start-steam`, then check `/tmp/steam-session.log` after a failed start.
+3. Check the session log: `~/.local/share/steam-session.log`
 
 ### Wrong display used (AMD)
 
@@ -360,8 +330,7 @@ cat /sys/class/drm/card*-*/status
 grep -l "^connected$" /sys/class/drm/card*-*/status
 ```
 
-If your external output isn't named `HDMI-A-*` or `DP-*`, update the
-`preferred_patterns` line in `start-steam` and the `eDP*` case in `river/init`.
+If your external output isn't named `HDMI-A-*` or `DP-*`, update the preferred output pattern in `river/init`.
 
 ### Controller not working
 
@@ -391,14 +360,23 @@ If your external output isn't named `HDMI-A-*` or `DP-*`, update the
 ### Audio not working
 
 - Verify `pipewire`, `pipewire-pulse`, and `wireplumber` are installed
-- Check if PipeWire started: `pgrep -u $USER pipewire`
-- The session script starts PipeWire manually if it's not already running
+- SDDM starts the systemd user session which activates PipeWire via socket activation
+- Check if PipeWire is running: `pgrep -u $USER pipewire`
+- Check systemd user session: `systemctl --user status pipewire wireplumber`
 
-### Session not appearing in tuigreet
+### Session not appearing in SDDM
 
 ```bash
 ls /usr/share/wayland-sessions/   # should contain steam.desktop and desktop.desktop
-cat /etc/greetd/config.toml       # verify tuigreet is the configured greeter
+systemctl status sddm             # verify SDDM is running
+journalctl -u sddm -b             # SDDM logs
+```
+
+### SDDM theme not showing
+
+```bash
+ls /usr/share/sddm/themes/starch/   # theme files should be present
+cat /etc/sddm.conf.d/10-wayland.conf  # should reference Theme=starch
 ```
 
 ---
