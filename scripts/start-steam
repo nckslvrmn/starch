@@ -74,7 +74,7 @@ export STEAM_RUNTIME_HEAVY=1
 # After gamescope exits, fall back to the river desktop session.
 # ---------------------------------------------------------------------------
 
-GAMESCOPE_ARGS=(--backend wayland --steam -f --rt)
+GAMESCOPE_ARGS=(--backend wayland --steam -f --rt --hdr-enabled)
 [ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=(-r "$REFRESH")
 
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
