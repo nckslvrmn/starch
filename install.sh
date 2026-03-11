@@ -30,6 +30,10 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ -z "${GAMING_USER:-}" ]; then
+    GAMING_USER="${SUDO_USER:-}"
+fi
+
+if [ -z "${GAMING_USER:-}" ]; then
     read -rp "Username to configure for gaming: " GAMING_USER
 fi
 
@@ -105,6 +109,9 @@ PACKAGES=(
 
     # JSON parsing for wlr-randr output in river/init
     jq
+
+    # Wayland-native dmenu replacement
+    bemenu
 
     # Brightness control (media keys in river)
     brightnessctl
@@ -227,6 +234,7 @@ info "  /usr/local/bin/start-steam"
 install -Dm755 "$SCRIPT_DIR/scripts/start-river" \
     /usr/local/bin/start-river
 info "  /usr/local/bin/start-river"
+
 
 # ---------------------------------------------------------------------------
 # 3b. SteamOS compatibility helpers (from shahnawazshahin/steam-using-gamescope-guide)
