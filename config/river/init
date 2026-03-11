@@ -91,7 +91,7 @@ _configure_displays "$GPU_VENDOR"
 riverctl map normal Alt Shift Tab focus-prev
 riverctl map normal Alt Tab       focus-next
 riverctl map normal Alt Tab       zoom
-riverctl map normal Super Space   spawn dmenu_run
+riverctl map normal Super Space   spawn "dmenu_run -fn 'FiraCode Nerd Font:size=16'"
 riverctl map normal Super+Shift E exit
 
 # Tiling (riversnap — commands sent to the running layout daemon)
