@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = nvidia-utils
+
+[Action]
+Description = Syncing flatpak NVIDIA GL extension to match driver...
+When = PostTransaction
+Exec = /usr/local/bin/nvidia-flatpak-gl-sync

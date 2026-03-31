@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Plex
+Comment=Plex Media Player via gamescope — fullscreen, HDR-enabled
+Exec=/usr/local/bin/start-plex
+Type=Application

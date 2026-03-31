@@ -25,6 +25,7 @@ Rectangle {
     function sessionIcon(sessionName) {
         var n = sessionName.toLowerCase()
         if (n.indexOf("steam") >= 0) return "images/steam.svg"
+        if (n.indexOf("plex")  >= 0) return "images/plex.svg"
         return "images/desktop.svg"
     }
 
@@ -224,6 +225,8 @@ Rectangle {
             id: usernameInput
             Layout.fillWidth: true
             height: s * 44
+
+            text: userModel.lastUser
 
             color:       inputBg
             borderColor: borderCol

@@ -1,0 +1,37 @@
+#!/bin/bash
+# nvidia-flatpak-gl-sync — install the flatpak GL/GL32 extensions that match
+# the currently installed NVIDIA driver, and remove stale ones.
+# Triggered automatically by the nvidia-utils pacman hook.
+
+set -uo pipefail
+
+DRIVER_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
+if [ -z "$DRIVER_VER" ]; then
+    echo "nvidia-flatpak-gl-sync: could not detect driver version, skipping"
+    exit 0
+fi
+
+EXT_VER=$(echo "$DRIVER_VER" | tr '.' '-')
+GL_EXT="org.freedesktop.Platform.GL.nvidia-${EXT_VER}"
+GL32_EXT="org.freedesktop.Platform.GL32.nvidia-${EXT_VER}"
+
+echo "nvidia-flatpak-gl-sync: driver ${DRIVER_VER} → installing ${GL_EXT}"
+
+flatpak install --system --noninteractive flathub "$GL_EXT"   2>/dev/null \
+    && echo "nvidia-flatpak-gl-sync: installed ${GL_EXT}" \
+    || echo "nvidia-flatpak-gl-sync: ${GL_EXT} already up to date or unavailable"
+
+flatpak install --system --noninteractive flathub "$GL32_EXT" 2>/dev/null \
+    && echo "nvidia-flatpak-gl-sync: installed ${GL32_EXT}" \
+    || echo "nvidia-flatpak-gl-sync: ${GL32_EXT} already up to date or unavailable"
+
+# Remove stale extensions that no longer match the current driver so they
+# don't accumulate across updates.
+flatpak list --system --columns=application 2>/dev/null \
+    | grep -E 'org\.freedesktop\.Platform\.GL(32)?\.nvidia-' \
+    | while read -r ext; do
+        if [ "$ext" != "$GL_EXT" ] && [ "$ext" != "$GL32_EXT" ]; then
+            echo "nvidia-flatpak-gl-sync: removing stale extension ${ext}"
+            flatpak uninstall --system --noninteractive "$ext" 2>/dev/null || true
+        fi
+    done

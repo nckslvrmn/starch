@@ -1,0 +1,23 @@
+#!/bin/bash
+# steamos-session-select — switch between Steam (gamescope) and Desktop (river)
+#
+# Steam's "Switch to Desktop" power-menu entry calls:
+#   steamos-session-select desktop
+#
+# From the river desktop, return to Steam via:
+#   steamos-session-select gamescope   (or just exit river → SDDM → pick Steam)
+
+case "${1:-}" in
+  desktop)
+    # Kill gamescope — start-steam will fall through to start-river
+    pkill -TERM -x gamescope
+    ;;
+  gamescope)
+    # Kill river — session ends, SDDM login screen takes over
+    pkill -TERM -x river 2>/dev/null
+    ;;
+  *)
+    echo "Usage: steamos-session-select {desktop|gamescope}"
+    exit 1
+    ;;
+esac

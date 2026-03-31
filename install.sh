@@ -116,11 +116,24 @@ PACKAGES=(
     # Brightness control (media keys in river)
     brightnessctl
 
+    # Network manager — required by Steam for network status via D-Bus
+    networkmanager
+
+    # XDG Desktop Portal — file dialogs, screen sharing for Wayland apps
+    xdg-desktop-portal-wlr
+    xdg-desktop-portal-gtk
+
+    # Clipboard support for Wayland
+    wl-clipboard
+
     # Login / display manager
     sddm
     weston          # Wayland compositor for the SDDM greeter (sddm uses weston --shell=kiosk)
     qt6-wayland     # Qt6 Wayland platform plugin (lets sddm-greeter-qt6 run as a Wayland client)
     qt6-svg         # SVG rendering for Qt6 (theme uses SVG icons)
+
+    # Flatpak runtime (needed for Plex HTPC and other sandboxed apps)
+    flatpak
 
     # AUR: improved Xbox controller driver (rumble, adaptive triggers,
     # better Bluetooth reliability vs the in-kernel xpad module)
@@ -209,10 +222,16 @@ install -Dm644 "$SCRIPT_DIR/etc/gamemode.ini" \
     /etc/gamemode.ini
 info "  /etc/gamemode.ini"
 
-# SDDM display manager — Wayland greeter mode
-install -Dm644 "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.conf" \
-    /etc/sddm.conf.d/10-wayland.conf
-info "  /etc/sddm.conf.d/10-wayland.conf"
+# NetworkManager — use iwd as WiFi backend (preserves iwctl workflow,
+# provides D-Bus API that Steam needs for network status detection)
+install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/iwd-backend.conf" \
+    /etc/NetworkManager/conf.d/iwd-backend.conf
+info "  /etc/NetworkManager/conf.d/iwd-backend.conf"
+
+# SDDM display manager — Wayland greeter mode (template the default user)
+sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.conf" \
+    | install -Dm644 /dev/stdin /etc/sddm.conf.d/10-wayland.conf
+info "  /etc/sddm.conf.d/10-wayland.conf (DefaultUser=$GAMING_USER)"
 
 # SDDM theme — starch (minimal dark, prominent session selector)
 find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
@@ -235,6 +254,74 @@ install -Dm755 "$SCRIPT_DIR/scripts/start-river" \
     /usr/local/bin/start-river
 info "  /usr/local/bin/start-river"
 
+install -Dm755 "$SCRIPT_DIR/scripts/start-plex" \
+    /usr/local/bin/start-plex
+info "  /usr/local/bin/start-plex"
+
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
+        /usr/local/bin/nvidia-flatpak-gl-sync
+    info "  /usr/local/bin/nvidia-flatpak-gl-sync"
+
+    install -Dm644 "$SCRIPT_DIR/etc/pacman.d/hooks/nvidia-flatpak-gl.hook" \
+        /etc/pacman.d/hooks/nvidia-flatpak-gl.hook
+    info "  /etc/pacman.d/hooks/nvidia-flatpak-gl.hook"
+fi
+
+
+install -Dm755 "$SCRIPT_DIR/scripts/steamos-session-select" \
+    /usr/bin/steamos-session-select
+info "  /usr/bin/steamos-session-select"
+
+# ---------------------------------------------------------------------------
+# 3c. Flatpak — add Flathub and install Plex HTPC
+# ---------------------------------------------------------------------------
+
+step "Configuring Flatpak and installing Plex HTPC"
+
+# Add Flathub as a system-wide remote (no-op if already present)
+flatpak remote-add --system --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo
+info "  Flathub remote present"
+
+# Install Plex HTPC system-wide so it's available to all users / sessions
+if flatpak info --system tv.plex.PlexHTPC &>/dev/null; then
+    info "  tv.plex.PlexHTPC already installed, skipping"
+else
+    flatpak install --system --noninteractive flathub tv.plex.PlexHTPC
+    info "  tv.plex.PlexHTPC installed"
+fi
+
+# NVIDIA only: install the matching GL runtime extension so flatpak apps can
+# use the host NVIDIA driver. Without this, GPU-accelerated flatpaks abort on
+# startup because they can't load the driver libs.
+if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
+    # Detect installed driver version (e.g. "570.86.16") and convert to
+    # the flatpak extension name format "570-86" (major-minor only).
+    RAW_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
+    if [ -n "$RAW_VER" ]; then
+        NVIDIA_EXT="org.freedesktop.Platform.GL.nvidia-$(echo "$RAW_VER" | tr '.' '-')"
+        if flatpak info --system "$NVIDIA_EXT" &>/dev/null; then
+            info "  $NVIDIA_EXT already installed, skipping"
+        else
+            flatpak install --system --noninteractive flathub "$NVIDIA_EXT" \
+                && info "  $NVIDIA_EXT installed" \
+                || warn "  Could not install $NVIDIA_EXT — Plex GPU acceleration may not work"
+        fi
+        # 32-bit variant (needed by some runtimes)
+        NVIDIA_EXT32="${NVIDIA_EXT/GL.nvidia/GL32.nvidia}"
+        if flatpak info --system "$NVIDIA_EXT32" &>/dev/null; then
+            info "  $NVIDIA_EXT32 already installed, skipping"
+        else
+            flatpak install --system --noninteractive flathub "$NVIDIA_EXT32" \
+                && info "  $NVIDIA_EXT32 installed" \
+                || warn "  Could not install $NVIDIA_EXT32 (non-fatal)"
+        fi
+    else
+        warn "  Could not detect NVIDIA driver version — skipping flatpak GL extension install"
+        warn "  Manually run: flatpak install flathub org.freedesktop.Platform.GL.nvidia-<major-minor>"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # 3b. SteamOS compatibility helpers (from shahnawazshahin/steam-using-gamescope-guide)
@@ -291,6 +378,10 @@ install -Dm644 "$SCRIPT_DIR/sessions/desktop.desktop" \
     /usr/share/wayland-sessions/desktop.desktop
 info "  /usr/share/wayland-sessions/desktop.desktop"
 
+install -Dm644 "$SCRIPT_DIR/sessions/plex.desktop" \
+    /usr/share/wayland-sessions/plex.desktop
+info "  /usr/share/wayland-sessions/plex.desktop"
+
 # ---------------------------------------------------------------------------
 # 4b. River configuration
 # ---------------------------------------------------------------------------
@@ -303,6 +394,18 @@ install -Dm755 "$SCRIPT_DIR/config/river/init" \
     "$GAMING_HOME/.config/river/init"
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/river/init"
 info "  $GAMING_HOME/.config/river/init"
+
+# Brave browser Wayland flags (HiDPI + native Wayland rendering)
+install -Dm644 "$SCRIPT_DIR/config/brave-flags.conf" \
+    "$GAMING_HOME/.config/brave-flags.conf"
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/brave-flags.conf"
+info "  $GAMING_HOME/.config/brave-flags.conf"
+
+# XDG Desktop Portal configuration (route portal requests to correct backends)
+install -Dm644 "$SCRIPT_DIR/config/xdg-desktop-portal/portals.conf" \
+    "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
+info "  $GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
 
 # ---------------------------------------------------------------------------
 # 5. User groups
@@ -326,6 +429,14 @@ done
 step "Enabling SDDM"
 systemctl enable sddm.service
 info "  sddm.service enabled"
+
+# NetworkManager — Steam requires its D-Bus API for network status detection
+if ! systemctl is-enabled NetworkManager.service &>/dev/null; then
+    systemctl enable NetworkManager.service
+    info "  NetworkManager.service enabled"
+else
+    info "  NetworkManager.service already enabled"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. uinput module — load immediately and persist across reboots
@@ -412,7 +523,7 @@ else
 fi
 
 echo "  After rebooting:"
-echo "    1. Select 'Steam' or 'Desktop' from SDDM"
+echo "    1. Select 'Steam', 'Plex', or 'Desktop' from SDDM"
 echo "    2. Allow Steam to update on first launch (Steam session only)"
 echo "    3. In Steam Settings > Compatibility:"
 echo "         Enable 'Steam Play for all titles'"

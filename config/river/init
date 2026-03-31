@@ -50,6 +50,14 @@ _configure_displays() {
             refresh_hz="$refresh_mhz"
         fi
 
+        # HiDPI: scale based on vertical resolution
+        local scale="1"
+        if [ "$height" -ge 2160 ]; then
+            scale="2"
+        elif [ "$height" -ge 1440 ]; then
+            scale="1.5"
+        fi
+
         case "$gpu_vendor" in
             amd)
                 case "$name" in
@@ -58,16 +66,18 @@ _configure_displays() {
                         wlr-randr --output "$name" --off
                         ;;
                     *)
-                        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz"
+                        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz scale=${scale}"
                         wlr-randr --output "$name" --on \
-                            --mode "${width}x${height}@${refresh_hz}"
+                            --mode "${width}x${height}@${refresh_hz}" \
+                            --scale "$scale"
                         ;;
                 esac
                 ;;
             *)
-                echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz"
+                echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz scale=${scale}"
                 wlr-randr --output "$name" --on \
-                    --mode "${width}x${height}@${refresh_hz}"
+                    --mode "${width}x${height}@${refresh_hz}" \
+                    --scale "$scale"
                 ;;
         esac
     done < <(echo "$wlr_json" | jq -r '

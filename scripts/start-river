@@ -14,6 +14,11 @@ export XDG_CURRENT_DESKTOP=river
 export MOZ_ENABLE_WAYLAND=1
 export SDL_VIDEODRIVER=wayland
 
+# HiDPI / Wayland-native app support
+export XCURSOR_SIZE=32
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+export ELECTRON_OZONE_PLATFORM_HINT=auto
+
 case "$GPU_VENDOR" in
     nvidia)
         export GBM_BACKEND=nvidia-drm

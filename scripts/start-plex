@@ -1,14 +1,14 @@
 #!/bin/bash
-# start-steam — gamescope + Steam session launcher
-# Deploy: sudo install -Dm755 scripts/start-steam /usr/local/bin/start-steam
-# Log:    ~/.local/share/steam-session.log
+# start-plex — gamescope + Plex Media Player session launcher
+# Deploy: sudo install -Dm755 scripts/start-plex /usr/local/bin/start-plex
+# Log:    ~/.local/share/plex-session.log
 set -uo pipefail
 
-LOGFILE="$HOME/.local/share/steam-session.log"
+LOGFILE="$HOME/.local/share/plex-session.log"
 mkdir -p "$(dirname "$LOGFILE")"
 exec > >(tee -a "$LOGFILE") 2>&1
 
-echo "[steam-session] START $(date '+%Y-%m-%d %H:%M:%S')"
+echo "[plex-session] START $(date '+%Y-%m-%d %H:%M:%S')"
 
 # ---------------------------------------------------------------------------
 # GPU detection
@@ -24,7 +24,7 @@ for card in /sys/class/drm/card[0-9]; do
     esac
 done
 
-echo "[steam-session] GPU: $GPU_VENDOR  device: $DRM_DEVICE"
+echo "[plex-session] GPU: $GPU_VENDOR  device: $DRM_DEVICE"
 
 # ---------------------------------------------------------------------------
 # Refresh rate — highest mode across all connected connectors
@@ -47,7 +47,7 @@ if [ -n "$DRM_MODULE" ] && command -v modetest &>/dev/null; then
     REFRESH="${REFRESH:-0}"
 fi
 
-echo "[steam-session] Refresh: ${REFRESH}Hz"
+echo "[plex-session] Refresh: ${REFRESH}Hz"
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -64,31 +64,40 @@ case "$GPU_VENDOR" in
         export NVD_BACKEND=direct
         export WLR_NO_HARDWARE_CURSORS=1
         export ENABLE_IMPLICIT_SYNC=1
-        export PROTON_ENABLE_NVAPI=1
         ;;
     amd)
         export LIBVA_DRIVER_NAME=radeonsi
         ;;
 esac
 
-export DXVK_ASYNC=1
-export STEAM_RUNTIME_HEAVY=1
-export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
-export STEAM_GAMESCOPE_SESSION=1
-
 # ---------------------------------------------------------------------------
-# Launch — SDDM hands off DRM master and audio (pipewire via systemd user
-# session) before this script runs, so no setup is needed here.
-# After gamescope exits, fall back to the river desktop session.
+# Launch — gamescope acts as the Wayland compositor for this session.
+# SDDM hands off DRM master and audio (pipewire via systemd user session)
+# before this script runs, so no setup is needed here.
 # ---------------------------------------------------------------------------
 
-GAMESCOPE_ARGS=(--backend drm --steam -f --rt --hdr-enabled)
+GAMESCOPE_ARGS=(--backend drm -f --hdr-enabled)
 [ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=(-r "$REFRESH")
 
-echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
-gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui
+# --device=dri: grant the flatpak sandbox access to DRM/GPU devices.
+# --env=...: flatpak sandboxes strip most inherited env, so pass the
+#            driver vars explicitly so Plex can initialize the GPU.
+FLATPAK_ARGS=(--device=dri)
+case "$GPU_VENDOR" in
+    nvidia)
+        FLATPAK_ARGS+=(
+            --env=LIBVA_DRIVER_NAME=nvidia
+            --env=NVD_BACKEND=direct
+            --env=__GLX_VENDOR_LIBRARY_NAME=nvidia
+            --env=GBM_BACKEND=nvidia-drm
+        )
+        ;;
+    amd)
+        FLATPAK_ARGS+=(--env=LIBVA_DRIVER_NAME=radeonsi)
+        ;;
+esac
 
-# When gamescope exits (Switch to Desktop, Steam exit, or crash), hand off to
-# the river desktop session.  Return to SDDM from river via Super+Shift+E.
-echo "[steam-session] gamescope exited, switching to desktop $(date '+%Y-%m-%d %H:%M:%S')"
-exec /usr/local/bin/start-river
+echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
+gamescope "${GAMESCOPE_ARGS[@]}" -- flatpak run "${FLATPAK_ARGS[@]}" tv.plex.PlexHTPC
+
+echo "[plex-session] END $(date '+%Y-%m-%d %H:%M:%S')"
