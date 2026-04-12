@@ -77,9 +77,21 @@ export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
 export STEAM_GAMESCOPE_SESSION=1
 
 # ---------------------------------------------------------------------------
-# Launch — SDDM hands off DRM master and audio (pipewire via systemd user
-# session) before this script runs, so no setup is needed here.
-# After gamescope exits, fall back to the river desktop session.
+# Wait for PipeWire + WirePlumber — SDDM starts the systemd user session but
+# audio services may still be initializing.  Without this, gamescope can grab
+# a half-ready audio node that later gets reassigned, killing in-game sound.
+# ---------------------------------------------------------------------------
+
+for i in $(seq 1 50); do
+    if pw-cli info 0 &>/dev/null && wpctl status &>/dev/null; then
+        echo "[steam-session] PipeWire ready after ~$((i * 100))ms"
+        break
+    fi
+    sleep 0.1
+done
+
+# ---------------------------------------------------------------------------
+# Launch — after gamescope exits, fall back to the river desktop session.
 # ---------------------------------------------------------------------------
 
 GAMESCOPE_ARGS=(--backend drm --steam -f --rt --hdr-enabled)

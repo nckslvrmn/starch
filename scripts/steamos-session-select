@@ -9,8 +9,9 @@
 
 case "${1:-}" in
   desktop)
-    # Kill gamescope — start-steam will fall through to start-river
-    pkill -TERM -x gamescope
+    # Shut down Steam gracefully — gamescope exits when its child (steam) does,
+    # then start-steam falls through to start-river.
+    steam -shutdown 2>/dev/null || pkill -TERM -f 'steam.*-gamepadui'
     ;;
   gamescope)
     # Kill river — session ends, SDDM login screen takes over
