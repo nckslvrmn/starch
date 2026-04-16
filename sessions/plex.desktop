@@ -1,5 +1,5 @@
 [Desktop Entry]
 Name=Plex
-Comment=Plex Media Player via gamescope — fullscreen, HDR-enabled
+Comment=Plex HTPC kiosk session via cage
 Exec=/usr/local/bin/start-plex
 Type=Application

@@ -84,7 +84,7 @@ Rectangle {
             text: Qt.formatDateTime(new Date(), "hh:mm")
 
             Timer {
-                interval: 10000
+                interval: 1000
                 repeat: true
                 running: true
                 onTriggered: {
@@ -292,6 +292,7 @@ Rectangle {
             color:        accent
             textColor:    "#0a0a0a"
             borderColor:  accent
+            hoverColor:   accentHov
             pressedColor: accentHov
             activeColor:  accentHov
 
@@ -350,6 +351,7 @@ Rectangle {
             color:        surface
             textColor:    fg
             borderColor:  borderCol
+            hoverColor:   "#222222"
             pressedColor: "#252525"
             activeColor:  "#222222"
 
@@ -370,6 +372,7 @@ Rectangle {
             color:        surface
             textColor:    fg
             borderColor:  borderCol
+            hoverColor:   "#222222"
             pressedColor: "#252525"
             activeColor:  "#222222"
 

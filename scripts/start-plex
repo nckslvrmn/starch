@@ -1,5 +1,5 @@
 #!/bin/bash
-# start-plex — gamescope + Plex Media Player session launcher
+# start-plex — Plex HTPC kiosk session via cage
 # Deploy: sudo install -Dm755 scripts/start-plex /usr/local/bin/start-plex
 # Log:    ~/.local/share/plex-session.log
 set -uo pipefail
@@ -11,93 +11,40 @@ exec > >(tee -a "$LOGFILE") 2>&1
 echo "[plex-session] START $(date '+%Y-%m-%d %H:%M:%S')"
 
 # ---------------------------------------------------------------------------
-# GPU detection
-# ---------------------------------------------------------------------------
-
-GPU_VENDOR="unknown"
-DRM_DEVICE="/dev/dri/card1"
-for card in /sys/class/drm/card[0-9]; do
-    vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
-    case "$vendor" in
-        0x10de) GPU_VENDOR="nvidia"; DRM_DEVICE="/dev/dri/$(basename "$card")"; break ;;
-        0x1002) GPU_VENDOR="amd";    DRM_DEVICE="/dev/dri/$(basename "$card")"; break ;;
-    esac
-done
-
-echo "[plex-session] GPU: $GPU_VENDOR  device: $DRM_DEVICE"
-
-# ---------------------------------------------------------------------------
-# Refresh rate — highest mode across all connected connectors
-# ---------------------------------------------------------------------------
-
-REFRESH=0
-DRM_MODULE=""
-case "$GPU_VENDOR" in
-    nvidia) DRM_MODULE="nvidia-drm" ;;
-    amd)    DRM_MODULE="amdgpu" ;;
-esac
-
-if [ -n "$DRM_MODULE" ] && command -v modetest &>/dev/null; then
-    REFRESH=$(modetest -M "$DRM_MODULE" 2>/dev/null | awk '
-        $3 == "connected"                              { in_conn = 1; next }
-        in_conn && /^[0-9]/                            { in_conn = 0 }
-        in_conn && /^[[:space:]]+#/ && $3+0 > max     { max = $3+0 }
-        END { if (max) printf "%d\n", max }
-    ')
-    REFRESH="${REFRESH:-0}"
-fi
-
-echo "[plex-session] Refresh: ${REFRESH}Hz"
-
-# ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 
-export WLR_DRM_DEVICES="$DRM_DEVICE"
-
-case "$GPU_VENDOR" in
-    nvidia)
-        export GBM_BACKEND=nvidia-drm
-        export __GLX_VENDOR_LIBRARY_NAME=nvidia
-        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
-        export LIBVA_DRIVER_NAME=nvidia
-        export NVD_BACKEND=direct
-        export WLR_NO_HARDWARE_CURSORS=1
-        export ENABLE_IMPLICIT_SYNC=1
-        ;;
-    amd)
-        export LIBVA_DRIVER_NAME=radeonsi
-        ;;
-esac
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+export LIBVA_DRIVER_NAME=nvidia
+export NVD_BACKEND=direct
+export WLR_NO_HARDWARE_CURSORS=1
+export ENABLE_IMPLICIT_SYNC=1
 
 # ---------------------------------------------------------------------------
-# Launch — gamescope acts as the Wayland compositor for this session.
-# SDDM hands off DRM master and audio (pipewire via systemd user session)
-# before this script runs, so no setup is needed here.
+# Wait for PipeWire + WirePlumber
 # ---------------------------------------------------------------------------
 
-GAMESCOPE_ARGS=(--backend drm -f --hdr-enabled)
-[ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=(-r "$REFRESH")
+for i in $(seq 1 50); do
+    if pw-cli info 0 &>/dev/null && wpctl status &>/dev/null; then
+        echo "[plex-session] PipeWire ready after ~$((i * 100))ms"
+        break
+    fi
+    sleep 0.1
+done
 
-# --device=dri: grant the flatpak sandbox access to DRM/GPU devices.
-# --env=...: flatpak sandboxes strip most inherited env, so pass the
-#            driver vars explicitly so Plex can initialize the GPU.
-FLATPAK_ARGS=(--device=dri)
-case "$GPU_VENDOR" in
-    nvidia)
-        FLATPAK_ARGS+=(
-            --env=LIBVA_DRIVER_NAME=nvidia
-            --env=NVD_BACKEND=direct
-            --env=__GLX_VENDOR_LIBRARY_NAME=nvidia
-            --env=GBM_BACKEND=nvidia-drm
-        )
-        ;;
-    amd)
-        FLATPAK_ARGS+=(--env=LIBVA_DRIVER_NAME=radeonsi)
-        ;;
-esac
+# ---------------------------------------------------------------------------
+# Launch — cage runs Plex fullscreen as the sole Wayland client.
+# When Plex exits, cage exits, and SDDM takes over.
+# ---------------------------------------------------------------------------
 
-echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
-gamescope "${GAMESCOPE_ARGS[@]}" -- flatpak run "${FLATPAK_ARGS[@]}" tv.plex.PlexHTPC
+echo "[plex-session] launching cage"
+cage -- flatpak run --device=dri \
+    --env=LIBVA_DRIVER_NAME=nvidia \
+    --env=NVD_BACKEND=direct \
+    --env=__GLX_VENDOR_LIBRARY_NAME=nvidia \
+    --env=GBM_BACKEND=nvidia-drm \
+    tv.plex.PlexHTPC
 
 echo "[plex-session] END $(date '+%Y-%m-%d %H:%M:%S')"

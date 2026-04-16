@@ -1,5 +1,6 @@
 #!/bin/bash
 # install.sh — Deploy starch gaming session to an Arch Linux system
+# Targets: Intel CPU + NVIDIA GPU
 #
 # Run as root from the starch/ directory:
 #   sudo bash install.sh
@@ -53,23 +54,7 @@ fi
 info "Installing starch gaming session for user: $GAMING_USER"
 
 # ---------------------------------------------------------------------------
-# 1. Detect GPU
-# ---------------------------------------------------------------------------
-
-step "Detecting GPU"
-
-INSTALL_GPU_VENDOR="unknown"
-for card in /sys/class/drm/card[0-9]; do
-    vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
-    case "$vendor" in
-        0x10de) INSTALL_GPU_VENDOR="nvidia"; break ;;
-        0x1002) INSTALL_GPU_VENDOR="amd";    break ;;
-    esac
-done
-info "Detected GPU vendor: $INSTALL_GPU_VENDOR"
-
-# ---------------------------------------------------------------------------
-# 2. Packages
+# 1. Packages
 # ---------------------------------------------------------------------------
 
 step "Installing packages"
@@ -85,6 +70,9 @@ PACKAGES=(
     vulkan-icd-loader
     lib32-vulkan-icd-loader
     lib32-mesa
+
+    # NVIDIA 32-bit userspace libs (needed by most games via Proton/WINE)
+    lib32-nvidia-utils
 
     # Xwayland (for X11 games running under Proton)
     xorg-xwayland
@@ -128,40 +116,22 @@ PACKAGES=(
 
     # Login / display manager
     sddm
-    weston          # Wayland compositor for the SDDM greeter (sddm uses weston --shell=kiosk)
-    qt6-wayland     # Qt6 Wayland platform plugin (lets sddm-greeter-qt6 run as a Wayland client)
-    qt6-svg         # SVG rendering for Qt6 (theme uses SVG icons)
+    weston          # Wayland compositor for the SDDM greeter
+    qt6-wayland     # Qt6 Wayland platform plugin for sddm-greeter-qt6
+    qt6-svg         # SVG rendering for Qt6 theme
+
+    # Kiosk compositor for Plex HTPC session
+    cage
 
     # Flatpak runtime (needed for Plex HTPC and other sandboxed apps)
     flatpak
 
-    # AUR: improved Xbox controller driver (rumble, adaptive triggers,
-    # better Bluetooth reliability vs the in-kernel xpad module)
+    # AUR: improved Xbox controller driver
     xpadneo-dkms
 
-    # GameCube / Wii emulator — GameCube USB adapter support configured below
+    # GameCube / Wii emulator
     dolphin-emu
 )
-
-case "$INSTALL_GPU_VENDOR" in
-    nvidia)
-        PACKAGES+=(
-            # NVIDIA 32-bit userspace libs (needed by most games via Proton/WINE)
-            lib32-nvidia-utils
-        )
-        ;;
-    amd)
-        PACKAGES+=(
-            # AMD Vulkan (RADV via Mesa — preferred over AMDVLK for gaming)
-            vulkan-radeon
-            lib32-vulkan-radeon
-
-            # VA-API hardware video decode
-            libva-mesa-driver
-            lib32-libva-mesa-driver
-        )
-        ;;
-esac
 
 # Compute which packages aren't already installed.
 MISSING=()
@@ -172,9 +142,6 @@ done
 PACKAGES_NEWLY_INSTALLED=false
 if [ ${#MISSING[@]} -gt 0 ]; then
     info "Installing ${#MISSING[@]} missing package(s): ${MISSING[*]}"
-    # paru refuses to run as root; invoke it as the gaming user.
-    # -H sets HOME to the user's home so paru uses the correct cache/config.
-    # --skipreview suppresses the AUR PKGBUILD diff prompt for non-interactive use.
     sudo -u "$GAMING_USER" -H paru -S --needed --noconfirm --skipreview "${MISSING[@]}"
     PACKAGES_NEWLY_INSTALLED=true
     info "Packages installed."
@@ -183,29 +150,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Deploy /etc configuration files
+# 2. Deploy /etc configuration files
 # ---------------------------------------------------------------------------
 
 step "Deploying /etc configuration"
 
 # GameCube USB adapter — prevent usbhid from claiming the device so Dolphin
-# can open it via libusb. Applied unconditionally (no GPU dependency).
+# can open it via libusb.
 install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/gcadapter.conf" \
     /etc/modprobe.d/starch-gcadapter.conf
 info "  /etc/modprobe.d/starch-gcadapter.conf"
 
-# NVIDIA-only: kernel module options and early initramfs loading
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
-    install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/nvidia.conf" \
-        /etc/modprobe.d/starch-nvidia.conf
-    info "  /etc/modprobe.d/starch-nvidia.conf"
+# NVIDIA kernel module options and early initramfs loading
+install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/nvidia.conf" \
+    /etc/modprobe.d/starch-nvidia.conf
+info "  /etc/modprobe.d/starch-nvidia.conf"
 
-    install -Dm644 "$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf" \
-        /etc/mkinitcpio.conf.d/starch-nvidia.conf
-    info "  /etc/mkinitcpio.conf.d/starch-nvidia.conf"
-else
-    info "  Skipping NVIDIA modprobe/mkinitcpio config (not an NVIDIA system)"
-fi
+install -Dm644 "$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf" \
+    /etc/mkinitcpio.conf.d/starch-nvidia.conf
+info "  /etc/mkinitcpio.conf.d/starch-nvidia.conf"
 
 # Input device / uinput udev rules
 install -Dm644 "$SCRIPT_DIR/etc/udev/rules.d/70-gaming.conf" \
@@ -222,8 +185,7 @@ install -Dm644 "$SCRIPT_DIR/etc/gamemode.ini" \
     /etc/gamemode.ini
 info "  /etc/gamemode.ini"
 
-# NetworkManager — use iwd as WiFi backend (preserves iwctl workflow,
-# provides D-Bus API that Steam needs for network status detection)
+# NetworkManager — use iwd as WiFi backend
 install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/iwd-backend.conf" \
     /etc/NetworkManager/conf.d/iwd-backend.conf
 info "  /etc/NetworkManager/conf.d/iwd-backend.conf"
@@ -233,7 +195,7 @@ sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.co
     | install -Dm644 /dev/stdin /etc/sddm.conf.d/10-wayland.conf
 info "  /etc/sddm.conf.d/10-wayland.conf (DefaultUser=$GAMING_USER)"
 
-# SDDM theme — starch (minimal dark, prominent session selector)
+# SDDM theme — starch
 find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
     dst="/usr/share/sddm/themes/starch/${src#$SCRIPT_DIR/etc/sddm/themes/starch/}"
     install -Dm644 "$src" "$dst"
@@ -241,10 +203,10 @@ find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
 done
 
 # ---------------------------------------------------------------------------
-# 3. Session launcher script
+# 3. Session launcher scripts
 # ---------------------------------------------------------------------------
 
-step "Installing start-steam"
+step "Installing session scripts"
 
 install -Dm755 "$SCRIPT_DIR/scripts/start-steam" \
     /usr/local/bin/start-steam
@@ -258,33 +220,28 @@ install -Dm755 "$SCRIPT_DIR/scripts/start-plex" \
     /usr/local/bin/start-plex
 info "  /usr/local/bin/start-plex"
 
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
-    install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
-        /usr/local/bin/nvidia-flatpak-gl-sync
-    info "  /usr/local/bin/nvidia-flatpak-gl-sync"
+install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
+    /usr/local/bin/nvidia-flatpak-gl-sync
+info "  /usr/local/bin/nvidia-flatpak-gl-sync"
 
-    install -Dm644 "$SCRIPT_DIR/etc/pacman.d/hooks/nvidia-flatpak-gl.hook" \
-        /etc/pacman.d/hooks/nvidia-flatpak-gl.hook
-    info "  /etc/pacman.d/hooks/nvidia-flatpak-gl.hook"
-fi
-
+install -Dm644 "$SCRIPT_DIR/etc/pacman.d/hooks/nvidia-flatpak-gl.hook" \
+    /etc/pacman.d/hooks/nvidia-flatpak-gl.hook
+info "  /etc/pacman.d/hooks/nvidia-flatpak-gl.hook"
 
 install -Dm755 "$SCRIPT_DIR/scripts/steamos-session-select" \
     /usr/bin/steamos-session-select
 info "  /usr/bin/steamos-session-select"
 
 # ---------------------------------------------------------------------------
-# 3c. Flatpak — add Flathub and install Plex HTPC
+# 4. Flatpak — add Flathub and install Plex HTPC
 # ---------------------------------------------------------------------------
 
 step "Configuring Flatpak and installing Plex HTPC"
 
-# Add Flathub as a system-wide remote (no-op if already present)
 flatpak remote-add --system --if-not-exists flathub \
     https://dl.flathub.org/repo/flathub.flatpakrepo
 info "  Flathub remote present"
 
-# Install Plex HTPC system-wide so it's available to all users / sessions
 if flatpak info --system tv.plex.PlexHTPC &>/dev/null; then
     info "  tv.plex.PlexHTPC already installed, skipping"
 else
@@ -292,44 +249,37 @@ else
     info "  tv.plex.PlexHTPC installed"
 fi
 
-# NVIDIA only: install the matching GL runtime extension so flatpak apps can
-# use the host NVIDIA driver. Without this, GPU-accelerated flatpaks abort on
-# startup because they can't load the driver libs.
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
-    # Detect installed driver version (e.g. "570.86.16") and convert to
-    # the flatpak extension name format "570-86" (major-minor only).
-    RAW_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
-    if [ -n "$RAW_VER" ]; then
-        NVIDIA_EXT="org.freedesktop.Platform.GL.nvidia-$(echo "$RAW_VER" | tr '.' '-')"
-        if flatpak info --system "$NVIDIA_EXT" &>/dev/null; then
-            info "  $NVIDIA_EXT already installed, skipping"
-        else
-            flatpak install --system --noninteractive flathub "$NVIDIA_EXT" \
-                && info "  $NVIDIA_EXT installed" \
-                || warn "  Could not install $NVIDIA_EXT — Plex GPU acceleration may not work"
-        fi
-        # 32-bit variant (needed by some runtimes)
-        NVIDIA_EXT32="${NVIDIA_EXT/GL.nvidia/GL32.nvidia}"
-        if flatpak info --system "$NVIDIA_EXT32" &>/dev/null; then
-            info "  $NVIDIA_EXT32 already installed, skipping"
-        else
-            flatpak install --system --noninteractive flathub "$NVIDIA_EXT32" \
-                && info "  $NVIDIA_EXT32 installed" \
-                || warn "  Could not install $NVIDIA_EXT32 (non-fatal)"
-        fi
+# Install the matching NVIDIA GL runtime extension so flatpak apps can
+# use the host NVIDIA driver.
+RAW_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
+if [ -n "$RAW_VER" ]; then
+    NVIDIA_EXT="org.freedesktop.Platform.GL.nvidia-$(echo "$RAW_VER" | tr '.' '-')"
+    if flatpak info --system "$NVIDIA_EXT" &>/dev/null; then
+        info "  $NVIDIA_EXT already installed, skipping"
     else
-        warn "  Could not detect NVIDIA driver version — skipping flatpak GL extension install"
-        warn "  Manually run: flatpak install flathub org.freedesktop.Platform.GL.nvidia-<major-minor>"
+        flatpak install --system --noninteractive flathub "$NVIDIA_EXT" \
+            && info "  $NVIDIA_EXT installed" \
+            || warn "  Could not install $NVIDIA_EXT — Plex GPU acceleration may not work"
     fi
+    NVIDIA_EXT32="${NVIDIA_EXT/GL.nvidia/GL32.nvidia}"
+    if flatpak info --system "$NVIDIA_EXT32" &>/dev/null; then
+        info "  $NVIDIA_EXT32 already installed, skipping"
+    else
+        flatpak install --system --noninteractive flathub "$NVIDIA_EXT32" \
+            && info "  $NVIDIA_EXT32 installed" \
+            || warn "  Could not install $NVIDIA_EXT32 (non-fatal)"
+    fi
+else
+    warn "  Could not detect NVIDIA driver version — skipping flatpak GL extension install"
+    warn "  Manually run: flatpak install flathub org.freedesktop.Platform.GL.nvidia-<major-minor>"
 fi
 
 # ---------------------------------------------------------------------------
-# 3b. SteamOS compatibility helpers (from shahnawazshahin/steam-using-gamescope-guide)
+# 5. SteamOS compatibility helpers
 # ---------------------------------------------------------------------------
 
 step "Installing SteamOS compatibility helpers"
 
-# Clone/update the source repository
 STEAMOS_GUIDE_REPO="/tmp/steam-using-gamescope-guide"
 if [ -d "$STEAMOS_GUIDE_REPO" ]; then
     (cd "$STEAMOS_GUIDE_REPO" && git pull -q origin main 2>/dev/null) || true
@@ -365,7 +315,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Wayland session descriptors (picked up by SDDM)
+# 6. Wayland session descriptors (picked up by SDDM)
 # ---------------------------------------------------------------------------
 
 step "Installing Wayland session descriptors"
@@ -374,16 +324,18 @@ install -Dm644 "$SCRIPT_DIR/sessions/steam.desktop" \
     /usr/share/wayland-sessions/steam.desktop
 info "  /usr/share/wayland-sessions/steam.desktop"
 
-install -Dm644 "$SCRIPT_DIR/sessions/desktop.desktop" \
-    /usr/share/wayland-sessions/desktop.desktop
-info "  /usr/share/wayland-sessions/desktop.desktop"
+# Overwrites the river package's river.desktop so only one "Desktop" entry
+# appears in SDDM. River updates will clobber this — just re-run install.sh.
+install -Dm644 "$SCRIPT_DIR/sessions/river.desktop" \
+    /usr/share/wayland-sessions/river.desktop
+info "  /usr/share/wayland-sessions/river.desktop (overwritten)"
 
 install -Dm644 "$SCRIPT_DIR/sessions/plex.desktop" \
     /usr/share/wayland-sessions/plex.desktop
 info "  /usr/share/wayland-sessions/plex.desktop"
 
 # ---------------------------------------------------------------------------
-# 4b. River configuration
+# 7. River configuration
 # ---------------------------------------------------------------------------
 
 step "Installing River configuration for $GAMING_USER"
@@ -401,14 +353,14 @@ install -Dm644 "$SCRIPT_DIR/config/brave-flags.conf" \
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/brave-flags.conf"
 info "  $GAMING_HOME/.config/brave-flags.conf"
 
-# XDG Desktop Portal configuration (route portal requests to correct backends)
+# XDG Desktop Portal configuration
 install -Dm644 "$SCRIPT_DIR/config/xdg-desktop-portal/portals.conf" \
     "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
 info "  $GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
 
 # ---------------------------------------------------------------------------
-# 5. User groups
+# 8. User groups
 # ---------------------------------------------------------------------------
 
 step "Configuring user groups for $GAMING_USER"
@@ -423,14 +375,14 @@ for group in input video audio seat gamemode; do
 done
 
 # ---------------------------------------------------------------------------
-# 6. Enable SDDM
+# 9. Enable services
 # ---------------------------------------------------------------------------
 
-step "Enabling SDDM"
+step "Enabling services"
+
 systemctl enable sddm.service
 info "  sddm.service enabled"
 
-# NetworkManager — Steam requires its D-Bus API for network status detection
 if ! systemctl is-enabled NetworkManager.service &>/dev/null; then
     systemctl enable NetworkManager.service
     info "  NetworkManager.service enabled"
@@ -438,8 +390,18 @@ else
     info "  NetworkManager.service already enabled"
 fi
 
+# NVIDIA power management — required when NVreg_PreserveVideoMemoryAllocations=1 is set.
+for svc in nvidia-suspend nvidia-hibernate nvidia-resume; do
+    if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
+        systemctl enable "${svc}.service"
+        info "  Enabled: ${svc}.service"
+    else
+        warn "  ${svc}.service not found — install nvidia-utils if not present"
+    fi
+done
+
 # ---------------------------------------------------------------------------
-# 7. uinput module — load immediately and persist across reboots
+# 10. uinput module — load immediately and persist across reboots
 # ---------------------------------------------------------------------------
 
 step "Configuring uinput module"
@@ -452,44 +414,22 @@ uinput
 EOF
 info "  /etc/modules-load.d/starch-uinput.conf"
 
-# Reload udev rules so controller rules take effect immediately
 udevadm control --reload-rules
 udevadm trigger
 info "  udev rules reloaded"
 
 # ---------------------------------------------------------------------------
-# 8. NVIDIA power management services (NVIDIA only)
-# ---------------------------------------------------------------------------
-
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
-    step "Enabling NVIDIA power management services"
-    # Required when NVreg_PreserveVideoMemoryAllocations=1 is set.
-    # Without these, suspend/resume will corrupt VRAM and likely freeze the system.
-
-    for svc in nvidia-suspend nvidia-hibernate nvidia-resume; do
-        if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
-            systemctl enable "${svc}.service"
-            info "  Enabled: ${svc}.service"
-        else
-            warn "  ${svc}.service not found — install nvidia-utils if not present"
-        fi
-    done
-else
-    info "Skipping NVIDIA power management services (not an NVIDIA system)"
-fi
-
-# ---------------------------------------------------------------------------
-# 9. Apply sysctl settings immediately (no reboot needed for these)
+# 11. Apply sysctl settings
 # ---------------------------------------------------------------------------
 
 step "Applying sysctl settings"
 sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
 
 # ---------------------------------------------------------------------------
-# 10. Rebuild initramfs (NVIDIA only — AMD drivers load automatically)
+# 12. Rebuild initramfs
 # ---------------------------------------------------------------------------
 
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ] && [ "$PACKAGES_NEWLY_INSTALLED" = "true" ]; then
+if [ "$PACKAGES_NEWLY_INSTALLED" = "true" ]; then
     step "Rebuilding initramfs"
     info "  Running mkinitcpio -P (this will take a moment)..."
     mkinitcpio -P
@@ -504,24 +444,16 @@ fi
 
 echo ""
 echo "================================================================"
-info "starch installation complete! (GPU: $INSTALL_GPU_VENDOR)"
+info "starch installation complete!"
 echo "================================================================"
 echo ""
-
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
-    echo "  Before rebooting, verify your systemd-boot entry contains:"
-    echo "    nvidia_drm.modeset=1"
-    echo ""
-    echo "  REBOOT to apply:"
-    echo "    - Early NVIDIA module loading (mkinitcpio change)"
-    echo "    - Group membership changes for $GAMING_USER"
-    echo ""
-else
-    echo "  REBOOT to apply:"
-    echo "    - Group membership changes for $GAMING_USER"
-    echo ""
-fi
-
+echo "  Before rebooting, verify your systemd-boot entry contains:"
+echo "    nvidia_drm.modeset=1"
+echo ""
+echo "  REBOOT to apply:"
+echo "    - Early NVIDIA module loading (mkinitcpio change)"
+echo "    - Group membership changes for $GAMING_USER"
+echo ""
 echo "  After rebooting:"
 echo "    1. Select 'Steam', 'Plex', or 'Desktop' from SDDM"
 echo "    2. Allow Steam to update on first launch (Steam session only)"
@@ -531,12 +463,10 @@ echo "         Select Proton Experimental or latest stable"
 echo "    4. In Steam Settings > Controller:"
 echo "         Enable controller configuration support"
 echo ""
+echo "  Switch to Desktop from Steam's power menu returns to SDDM."
+echo ""
 echo "  If you need to troubleshoot, check:"
-if [ "$INSTALL_GPU_VENDOR" = "nvidia" ]; then
-    echo "    - Kernel logs: dmesg | grep -i nvidia"
-else
-    echo "    - Kernel logs: dmesg | grep -i amdgpu"
-fi
+echo "    - Kernel logs: dmesg | grep -i nvidia"
 echo "    - SDDM logs: journalctl -u sddm -b"
 echo "    - Steam session log: ~/.local/share/steam-session.log"
 echo ""
