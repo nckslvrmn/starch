@@ -231,7 +231,7 @@ Rectangle {
             color:       inputBg
             borderColor: borderCol
             focusColor:  accent
-            hoverColor:  "#242424"
+            hoverColor:  "#444444"
             textColor:   fg
 
             font.pixelSize: s * 15
@@ -258,7 +258,7 @@ Rectangle {
             color:       inputBg
             borderColor: borderCol
             focusColor:  accent
-            hoverColor:  "#242424"
+            hoverColor:  "#444444"
             textColor:   fg
 
             tooltipEnabled: true
@@ -292,7 +292,6 @@ Rectangle {
             color:        accent
             textColor:    "#0a0a0a"
             borderColor:  accent
-            hoverColor:   accentHov
             pressedColor: accentHov
             activeColor:  accentHov
 
@@ -351,7 +350,6 @@ Rectangle {
             color:        surface
             textColor:    fg
             borderColor:  borderCol
-            hoverColor:   "#222222"
             pressedColor: "#252525"
             activeColor:  "#222222"
 
@@ -372,7 +370,6 @@ Rectangle {
             color:        surface
             textColor:    fg
             borderColor:  borderCol
-            hoverColor:   "#222222"
             pressedColor: "#252525"
             activeColor:  "#222222"
 
