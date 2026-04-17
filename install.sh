@@ -120,9 +120,6 @@ PACKAGES=(
     qt6-wayland     # Qt6 Wayland platform plugin for sddm-greeter-qt6
     qt6-svg         # SVG rendering for Qt6 theme
 
-    # Kiosk compositor for Plex HTPC session
-    cage
-
     # Flatpak runtime (needed for Plex HTPC and other sandboxed apps)
     flatpak
 

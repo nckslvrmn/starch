@@ -11,12 +11,12 @@ SteamOS-like console sessions and a River desktop on Arch Linux. NVIDIA only.
 ```
 SDDM (Wayland, starch theme)
 ├── Steam    →  start-steam  →  gamescope (DRM master, HDR) → steam -gamepadui
-├── Plex     →  start-plex   →  cage (kiosk) → Plex HTPC flatpak
+├── Plex     →  start-plex   →  gamescope (adaptive sync) → Plex HTPC flatpak
 └── Desktop  →  start-river  →  river (wlr-randr display config on init)
 ```
 
 - **Steam session** — gamescope takes direct DRM ownership and runs Steam in Big Picture mode. HDR enabled, refresh rate auto-detected via `modetest`. "Switch to Desktop" in Steam's power menu kills gamescope, ending the session and returning to SDDM.
-- **Plex session** — cage kiosk compositor runs Plex HTPC fullscreen as the sole Wayland client. Adaptive sync enabled for content-matched refresh rates on VRR displays.
+- **Plex session** — gamescope runs Plex HTPC fullscreen with adaptive sync. VRR presents frames at the content's native cadence (24fps, 30fps, etc.) for judder-free video playback.
 - **Desktop session** — River tiling Wayland compositor with automatic display configuration via `wlr-randr`, HiDPI scaling, and media key bindings.
 - **SDDM** — Wayland mode with a custom dark theme. Handles DRM master handoff and PipeWire/audio startup via systemd user session.
 
@@ -53,7 +53,7 @@ Installed automatically by `install.sh`:
 |----------|----------|
 | Gaming | `gamescope`, `steam`, `gamemode`, `lib32-gamemode`, `mangohud`, `lib32-mangohud` |
 | Vulkan | `vulkan-icd-loader`, `lib32-vulkan-icd-loader`, `lib32-mesa`, `lib32-nvidia-utils` |
-| Wayland | `xorg-xwayland`, `wlr-randr`, `jq`, `wl-clipboard`, `cage` |
+| Wayland | `xorg-xwayland`, `wlr-randr`, `jq`, `wl-clipboard` |
 | Audio | `pipewire`, `pipewire-pulse`, `pipewire-alsa`, `lib32-pipewire`, `wireplumber` |
 | Desktop | `bemenu`, `brightnessctl`, `xdg-desktop-portal-wlr`, `xdg-desktop-portal-gtk` |
 | Display manager | `sddm`, `weston`, `qt6-wayland`, `qt6-svg` |
@@ -69,7 +69,7 @@ starch/
 ├── install.sh                          — Installer (run as root)
 ├── scripts/
 │   ├── start-steam                     — gamescope + Steam session
-│   ├── start-plex                      — cage + Plex HTPC session
+│   ├── start-plex                      — gamescope + Plex HTPC session
 │   ├── start-river                     — River WM session
 │   ├── steamos-session-select          — Session switcher (kills gamescope → SDDM)
 │   └── nvidia-flatpak-gl-sync          — Sync NVIDIA GL libs to flatpak
@@ -100,7 +100,7 @@ starch/
 
 **Steam → SDDM:** Steam power menu → "Switch to Desktop" calls `steamos-session-select desktop`, which kills gamescope. The session ends and SDDM takes back the display.
 
-**Plex → SDDM:** Close Plex. Cage exits when its client does, ending the session.
+**Plex → SDDM:** Close Plex. Gamescope exits when its client does, ending the session.
 
 **Desktop → SDDM:** `Super+Shift+E` exits River.
 
@@ -114,7 +114,7 @@ From SDDM, pick any session.
 
 **gamescope as DRM master** — Direct KMS scanout, lower latency, HDR, no intermediate compositor. Resolution auto-detected from EDID; only refresh rate (`-r`) is passed.
 
-**cage for Plex** — Minimal kiosk compositor. No window management overhead. Plex is the only client.
+**gamescope with adaptive sync for Plex** — VRR presents each frame at the content's native rate, eliminating pulldown judder that fixed-refresh compositors cause with 24fps/30fps video.
 
 **Early NVIDIA module loading** — Modules in initramfs via `mkinitcpio.conf.d` so DRM devices are ready before SDDM starts.
 

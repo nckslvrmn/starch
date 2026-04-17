@@ -62,23 +62,31 @@ export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
 export STEAM_GAMESCOPE_SESSION=1
 
 # ---------------------------------------------------------------------------
-# Wait for PipeWire + WirePlumber — SDDM starts the systemd user session but
-# audio services may still be initializing.
+# Wait for a real default audio sink — not just the PipeWire daemon. SDDM
+# starts the user session fast; WirePlumber may not have bound a sink yet
+# when Steam connects, causing the familiar "boot video has sound, nothing
+# after does" bug. wpctl returns non-zero if DEFAULT_AUDIO_SINK has no node.
 # ---------------------------------------------------------------------------
 
-for i in $(seq 1 50); do
-    if pw-cli info 0 &>/dev/null && wpctl status &>/dev/null; then
-        echo "[steam-session] PipeWire ready after ~$((i * 100))ms"
+systemctl --user start pipewire.service pipewire-pulse.service wireplumber.service 2>/dev/null || true
+
+for i in $(seq 1 100); do
+    if wpctl get-volume @DEFAULT_AUDIO_SINK@ &>/dev/null; then
+        echo "[steam-session] Default audio sink ready after ~$((i * 100))ms"
         break
     fi
     sleep 0.1
 done
 
+if ! wpctl get-volume @DEFAULT_AUDIO_SINK@ &>/dev/null; then
+    echo "[steam-session] WARNING: no default audio sink after 10s — launching anyway"
+fi
+
 # ---------------------------------------------------------------------------
 # Launch — when gamescope exits, the session ends and SDDM takes over.
 # ---------------------------------------------------------------------------
 
-GAMESCOPE_ARGS=(--backend drm --steam -f --rt --hdr-enabled)
+GAMESCOPE_ARGS=(--backend drm --steam -f --rt --hdr-enabled --adaptive-sync)
 [ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=(-r "$REFRESH")
 
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
