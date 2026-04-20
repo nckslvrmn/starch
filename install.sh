@@ -398,29 +398,34 @@ else
     info "  tv.plex.PlexHTPC installed"
 fi
 
-# Install the matching NVIDIA GL runtime extension so flatpak apps can
-# use the host NVIDIA driver.
-RAW_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
-if [ -n "$RAW_VER" ]; then
-    NVIDIA_EXT="org.freedesktop.Platform.GL.nvidia-$(echo "$RAW_VER" | tr '.' '-')"
-    if flatpak info --system "$NVIDIA_EXT" &>/dev/null; then
-        info "  $NVIDIA_EXT already installed, skipping"
+# Install the matching NVIDIA GL runtime extension so flatpak apps can use
+# the host NVIDIA driver. AMD systems use the default org.freedesktop.Platform
+# GL runtime (Mesa) which Flathub ships out of the box — nothing to do.
+if [ "$HW_PROFILE" != "amd" ]; then
+    RAW_VER=$(modinfo -F version nvidia 2>/dev/null | head -1)
+    if [ -n "$RAW_VER" ]; then
+        NVIDIA_EXT="org.freedesktop.Platform.GL.nvidia-$(echo "$RAW_VER" | tr '.' '-')"
+        if flatpak info --system "$NVIDIA_EXT" &>/dev/null; then
+            info "  $NVIDIA_EXT already installed, skipping"
+        else
+            flatpak install --system --noninteractive flathub "$NVIDIA_EXT" \
+                && info "  $NVIDIA_EXT installed" \
+                || warn "  Could not install $NVIDIA_EXT — Plex GPU acceleration may not work"
+        fi
+        NVIDIA_EXT32="${NVIDIA_EXT/GL.nvidia/GL32.nvidia}"
+        if flatpak info --system "$NVIDIA_EXT32" &>/dev/null; then
+            info "  $NVIDIA_EXT32 already installed, skipping"
+        else
+            flatpak install --system --noninteractive flathub "$NVIDIA_EXT32" \
+                && info "  $NVIDIA_EXT32 installed" \
+                || warn "  Could not install $NVIDIA_EXT32 (non-fatal)"
+        fi
     else
-        flatpak install --system --noninteractive flathub "$NVIDIA_EXT" \
-            && info "  $NVIDIA_EXT installed" \
-            || warn "  Could not install $NVIDIA_EXT — Plex GPU acceleration may not work"
-    fi
-    NVIDIA_EXT32="${NVIDIA_EXT/GL.nvidia/GL32.nvidia}"
-    if flatpak info --system "$NVIDIA_EXT32" &>/dev/null; then
-        info "  $NVIDIA_EXT32 already installed, skipping"
-    else
-        flatpak install --system --noninteractive flathub "$NVIDIA_EXT32" \
-            && info "  $NVIDIA_EXT32 installed" \
-            || warn "  Could not install $NVIDIA_EXT32 (non-fatal)"
+        warn "  Could not detect NVIDIA driver version — skipping flatpak GL extension install"
+        warn "  Manually run: flatpak install flathub org.freedesktop.Platform.GL.nvidia-<major-minor>"
     fi
 else
-    warn "  Could not detect NVIDIA driver version — skipping flatpak GL extension install"
-    warn "  Manually run: flatpak install flathub org.freedesktop.Platform.GL.nvidia-<major-minor>"
+    info "  amd profile: using the default Mesa GL runtime (no NVIDIA extension needed)"
 fi
 
 # ---------------------------------------------------------------------------
