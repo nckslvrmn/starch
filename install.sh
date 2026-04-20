@@ -357,13 +357,25 @@ install -Dm755 "$SCRIPT_DIR/scripts/starch-select-display" \
     /usr/local/bin/starch-select-display
 info "  /usr/local/bin/starch-select-display"
 
-install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
-    /usr/local/bin/nvidia-flatpak-gl-sync
-info "  /usr/local/bin/nvidia-flatpak-gl-sync"
+# NVIDIA flatpak GL extension sync — only relevant when nvidia-utils is
+# installed. On AMD remove any leftover hook/script from a previous profile.
+if [ "$HW_PROFILE" != "amd" ]; then
+    install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
+        /usr/local/bin/nvidia-flatpak-gl-sync
+    info "  /usr/local/bin/nvidia-flatpak-gl-sync"
 
-install -Dm644 "$SCRIPT_DIR/etc/pacman.d/hooks/nvidia-flatpak-gl.hook" \
-    /etc/pacman.d/hooks/nvidia-flatpak-gl.hook
-info "  /etc/pacman.d/hooks/nvidia-flatpak-gl.hook"
+    install -Dm644 "$SCRIPT_DIR/etc/pacman.d/hooks/nvidia-flatpak-gl.hook" \
+        /etc/pacman.d/hooks/nvidia-flatpak-gl.hook
+    info "  /etc/pacman.d/hooks/nvidia-flatpak-gl.hook"
+else
+    for f in /usr/local/bin/nvidia-flatpak-gl-sync \
+             /etc/pacman.d/hooks/nvidia-flatpak-gl.hook; do
+        if [ -e "$f" ]; then
+            rm -f "$f"
+            info "  Removed $f (amd profile)"
+        fi
+    done
+fi
 
 install -Dm755 "$SCRIPT_DIR/scripts/steamos-session-select" \
     /usr/bin/steamos-session-select
