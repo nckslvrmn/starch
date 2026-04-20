@@ -335,23 +335,23 @@ starch_apply_gpu_env() {
             export NVD_BACKEND=direct
             ;;
         optimus)
-            # Compositor: scan out on Intel, render on NVIDIA (wlroots hybrid
-            # GPU convention — first device is the primary/display device).
-            if [ -n "$STARCH_INTEL_CARD" ] && [ -n "$STARCH_NVIDIA_CARD" ]; then
-                export WLR_DRM_DEVICES="$STARCH_INTEL_CARD:$STARCH_NVIDIA_CARD"
-            else
-                export WLR_DRM_DEVICES="$STARCH_DISPLAY_CARD"
-            fi
-            export GBM_BACKEND=nvidia-drm
-            export __GLX_VENDOR_LIBRARY_NAME=nvidia
-            export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+            # Compositor (River / gamescope) MUST scan out on the Intel iGPU
+            # and use Mesa's GBM / EGL / Vulkan for its own rendering context.
+            # Setting GBM_BACKEND=nvidia-drm or forcing the NVIDIA EGL/VK ICDs
+            # here would make the compositor try to create an EGL display on
+            # the NVIDIA card — which has NO display outputs on an Optimus
+            # laptop — causing:
+            #   - "unable to open /dev/dri/cardN as KMS device"
+            #   - "failed to create EGL display/context"
+            #   - "could not match drm and vulkan device"
+            #
+            # NVIDIA PRIME offload env vars belong on *child* apps (games,
+            # Steam, Plex), not on the compositor.  Use starch_prime_env or
+            # starch_flatpak_env_args to pass them to child processes.
+            export WLR_DRM_DEVICES="$STARCH_INTEL_CARD"
+            # VA-API video decode still goes through NVIDIA.
             export LIBVA_DRIVER_NAME=nvidia
             export NVD_BACKEND=direct
-            # PRIME render offload for anything the session spawns.
-            export __NV_PRIME_RENDER_OFFLOAD=1
-            export __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
-            export __VK_LAYER_NV_optimus=NVIDIA_only
-            export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
             ;;
         amd)
             export WLR_DRM_DEVICES="$STARCH_DISPLAY_CARD"
@@ -372,6 +372,45 @@ starch_apply_gpu_env() {
 #     read -r -a FP_ENV < <(starch_flatpak_env_args)
 #     flatpak run "${FP_ENV[@]}" --device=dri tv.plex.PlexHTPC
 
+# ---- PRIME offload env for child apps (optimus only) ----------------------
+#
+# Returns the env var assignments that make a child process render on the
+# NVIDIA dGPU via PRIME offload.  On non-optimus profiles this is a no-op.
+#
+# Two output modes controlled by the first argument:
+#
+#   starch_prime_env export   — prints "export K=V" lines (eval-able)
+#   starch_prime_env env      — prints "K=V" tokens for use with /usr/bin/env
+#   starch_prime_env flatpak  — prints "--env=K=V" flags for flatpak run
+#
+# Usage in start-steam (pass to the process *after* gamescope's --):
+#
+#   read -r -a PRIME < <(starch_prime_env env)
+#   exec gamescope … -- env "${PRIME[@]}" steam -gamepadui
+
+starch_prime_env() {
+    local mode="${1:-env}"
+    [ "$STARCH_PROFILE" = "optimus" ] || return 0
+
+    local -a vars=(
+        __NV_PRIME_RENDER_OFFLOAD=1
+        __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
+        __GLX_VENDOR_LIBRARY_NAME=nvidia
+        __VK_LAYER_NV_optimus=NVIDIA_only
+        VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+        GBM_BACKEND=nvidia-drm
+    )
+
+    local v
+    for v in "${vars[@]}"; do
+        case "$mode" in
+            export)  printf 'export %s\n' "$v" ;;
+            env)     printf '%s\n' "$v" ;;
+            flatpak) printf -- '--env=%s\n' "$v" ;;
+        esac
+    done
+}
+
 starch_flatpak_env_args() {
     local args=()
     case "$STARCH_PROFILE" in
@@ -387,13 +426,13 @@ starch_flatpak_env_args() {
             args+=(
                 --env=LIBVA_DRIVER_NAME=nvidia
                 --env=NVD_BACKEND=direct
-                --env=__GLX_VENDOR_LIBRARY_NAME=nvidia
-                --env=GBM_BACKEND=nvidia-drm
-                --env=__NV_PRIME_RENDER_OFFLOAD=1
-                --env=__NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
-                --env=__VK_LAYER_NV_optimus=NVIDIA_only
-                --env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
             )
+            # Add the full PRIME offload set so the sandboxed app renders
+            # on the NVIDIA dGPU.
+            local v
+            while IFS= read -r v; do
+                [ -n "$v" ] && args+=("$v")
+            done < <(starch_prime_env flatpak)
             ;;
         amd)
             args+=(

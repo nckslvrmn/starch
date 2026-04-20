@@ -33,3 +33,6 @@ GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
 exec gamescope "${GAMESCOPE_ARGS[@]}" -- \
     flatpak run --device=dri "${FP_ENV[@]}" tv.plex.PlexHTPC
+# Note: on optimus, the PRIME offload vars are already included in FP_ENV
+# via starch_flatpak_env_args → starch_prime_env, so the Plex flatpak app
+# renders on the NVIDIA dGPU while gamescope scans out on Intel.

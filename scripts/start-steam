@@ -33,5 +33,13 @@ GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync)
 [ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
+# On optimus the compositor (gamescope) runs on the Intel iGPU for KMS;
+# Steam and its games need PRIME offload env to render on the NVIDIA dGPU.
+mapfile -t PRIME_ENV < <(starch_prime_env env)
+
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
-exec gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui
+if [ ${#PRIME_ENV[@]} -gt 0 ]; then
+    exec gamescope "${GAMESCOPE_ARGS[@]}" -- env "${PRIME_ENV[@]}" steam -gamepadui
+else
+    exec gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui
+fi
