@@ -1,10 +1,16 @@
 #!/bin/bash
 # start-river — River Wayland compositor session launcher
+# Deploy: sudo install -Dm755 scripts/start-river /usr/local/bin/start-river
+# Log:    ~/.local/share/river-session.log
 set -uo pipefail
 
 # shellcheck source=./starch-profile.sh
 . /usr/local/lib/starch/profile.sh
+
 starch_profile_init
+starch_session_begin river
+starch_check_gpu_modules river-session
+starch_apply_gpu_env
 
 export XDG_CURRENT_DESKTOP=river
 export MOZ_ENABLE_WAYLAND=1
@@ -14,8 +20,6 @@ export SDL_VIDEODRIVER=wayland
 export XCURSOR_SIZE=32
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
 export ELECTRON_OZONE_PLATFORM_HINT=auto
-
-starch_apply_gpu_env
 
 # Wait for WirePlumber to bind a real default sink so the media-key bindings
 # configured in config/river/init have something to target.
