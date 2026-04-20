@@ -31,8 +31,7 @@ GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
-    # Force Intel for KMS + Vulkan compositing (see start-steam comments).
-    GAMESCOPE_ARGS+=(--force-drm-device "$STARCH_INTEL_CARD")
+    # Intel Vulkan for compositing (see start-steam comments).
     GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
 fi
 
