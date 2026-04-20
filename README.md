@@ -1,8 +1,15 @@
 # starch
 
-SteamOS-like console sessions and a River desktop on Arch Linux. NVIDIA only.
+SteamOS-like console sessions and a River desktop on Arch Linux.
 
-**Hardware:** Lenovo Legion Pro 7 Gen 8 — Intel 13900HX + RTX 4090 Mobile, discrete-only BIOS mode.
+**Supported hardware profiles:**
+
+| Profile    | Example hardware                                 | GPU mode                                             |
+|------------|--------------------------------------------------|------------------------------------------------------|
+| `discrete` | Lenovo Legion Pro 7 Gen 8 (13900HX + RTX 4090M)  | NVIDIA-only, BIOS set to Discrete GPU Only           |
+| `optimus`  | Dell Precision 5550 (i7-10xxH + T2000 Max-Q)     | Hybrid — Intel iGPU scans out, NVIDIA PRIME renders  |
+
+The installer auto-detects which profile applies from `lspci`, or you can override with `sudo HW_PROFILE=optimus bash install.sh`.
 
 ---
 
@@ -27,7 +34,9 @@ SDDM (Wayland, starch theme)
 - **Arch Linux** with `base linux linux-headers`
 - **`nvidia-open`** driver installed and working
 - **`nvidia_drm.modeset=1`** in kernel parameters
-- **BIOS set to Discrete GPU Only** (not Hybrid/Optimus)
+- **BIOS graphics mode:**
+  - `discrete` profile → Discrete GPU Only
+  - `optimus` profile → Hybrid / Optimus (Intel iGPU + NVIDIA dGPU visible)
 - **paru** AUR helper
 - **systemd-boot** (recommended)
 
@@ -39,6 +48,8 @@ SDDM (Wayland, starch theme)
 git clone https://github.com/your-username/starch.git
 cd starch
 sudo bash install.sh
+# or force the Optimus profile on a Precision 5550:
+# sudo HW_PROFILE=optimus bash install.sh
 
 # 3. Reboot — select Steam, Plex, or Desktop from SDDM
 ```
@@ -58,7 +69,8 @@ Installed automatically by `install.sh`:
 | Desktop | `bemenu`, `brightnessctl`, `xdg-desktop-portal-wlr`, `xdg-desktop-portal-gtk` |
 | Display manager | `sddm`, `weston`, `qt6-wayland`, `qt6-svg` |
 | Controllers | `xpadneo-dkms` (AUR), `dolphin-emu` |
-| Other | `flatpak`, `networkmanager` |
+| Other | `flatpak`, `networkmanager`, `libnewt` (whiptail) |
+| Optimus-only | `mesa`, `vulkan-intel`, `lib32-vulkan-intel`, `intel-media-driver`, `libva-utils` |
 
 ---
 
@@ -66,33 +78,42 @@ Installed automatically by `install.sh`:
 
 ```
 starch/
-├── install.sh                          — Installer (run as root)
+├── install.sh                                — Installer (run as root)
 ├── scripts/
-│   ├── start-steam                     — gamescope + Steam session
-│   ├── start-plex                      — gamescope + Plex HTPC session
-│   ├── start-river                     — River WM session
-│   ├── steamos-session-select          — Session switcher (kills gamescope → SDDM)
-│   └── nvidia-flatpak-gl-sync          — Sync NVIDIA GL libs to flatpak
+│   ├── starch-profile.sh                     — Shared helper: profile + GPU env
+│   │                                           + primary-output resolution
+│   │                                           + audio sink wait
+│   ├── starch-select-display                 — TUI to pick primary display
+│   ├── start-steam                           — gamescope + Steam session
+│   ├── start-plex                            — gamescope + Plex HTPC session
+│   ├── start-river                           — River WM session
+│   ├── steamos-session-select                — Session switcher (kills gamescope → SDDM)
+│   └── nvidia-flatpak-gl-sync                — Sync NVIDIA GL libs to flatpak
 ├── sessions/
-│   ├── steam.desktop                   — SDDM "Steam" entry
-│   ├── river.desktop                   — SDDM "Desktop" entry (overwrites river package)
-│   └── plex.desktop                    — SDDM "Plex" entry
+│   ├── steam.desktop                         — SDDM "Steam" entry
+│   ├── river.desktop                         — SDDM "Desktop" entry (overwrites river package)
+│   └── plex.desktop                          — SDDM "Plex" entry
 ├── config/
-│   ├── river/init                      — Display config + keybindings
-│   ├── brave-flags.conf                — Wayland flags for Brave
+│   ├── river/init                            — Display config + keybindings
+│   ├── brave-flags.conf                      — Wayland flags for Brave
 │   └── xdg-desktop-portal/portals.conf
 └── etc/
-    ├── sddm.conf.d/10-wayland.conf     → /etc/sddm.conf.d/
-    ├── sddm/themes/starch/             → /usr/share/sddm/themes/starch/
-    ├── modprobe.d/nvidia.conf          → /etc/modprobe.d/starch-nvidia.conf
-    ├── modprobe.d/gcadapter.conf       → /etc/modprobe.d/starch-gcadapter.conf
-    ├── mkinitcpio.conf.d/nvidia.conf   → /etc/mkinitcpio.conf.d/starch-nvidia.conf
+    ├── sddm.conf.d/10-wayland.conf           → /etc/sddm.conf.d/
+    ├── sddm/themes/starch/                   → /usr/share/sddm/themes/starch/
+    ├── modprobe.d/nvidia.conf                → /etc/modprobe.d/starch-nvidia.conf (discrete)
+    ├── modprobe.d/nvidia-optimus.conf        → /etc/modprobe.d/starch-nvidia.conf (optimus)
+    ├── modprobe.d/gcadapter.conf             → /etc/modprobe.d/starch-gcadapter.conf
+    ├── mkinitcpio.conf.d/nvidia.conf         → /etc/mkinitcpio.conf.d/starch-nvidia.conf (discrete)
+    ├── mkinitcpio.conf.d/nvidia-optimus.conf → /etc/mkinitcpio.conf.d/starch-nvidia.conf (optimus)
     ├── pacman.d/hooks/nvidia-flatpak-gl.hook
-    ├── gamemode.ini                    → /etc/gamemode.ini
-    ├── sysctl.d/99-gaming.conf         → /etc/sysctl.d/99-starch-gaming.conf
-    ├── udev/rules.d/70-gaming.conf     → /etc/udev/rules.d/70-starch-gaming.rules
+    ├── gamemode.ini                          → /etc/gamemode.ini
+    ├── sysctl.d/99-gaming.conf               → /etc/sysctl.d/99-starch-gaming.conf
+    ├── udev/rules.d/70-gaming.conf           → /etc/udev/rules.d/70-starch-gaming.rules
     └── NetworkManager/conf.d/iwd-backend.conf
 ```
+
+Profile state lives at `/etc/starch/profile.conf` (written by `install.sh`).
+User display preference lives at `~/.config/starch/display.conf` (written by `starch-select-display`).
 
 ---
 
@@ -105,6 +126,41 @@ starch/
 **Desktop → SDDM:** `Super+Shift+E` exits River.
 
 From SDDM, pick any session.
+
+---
+
+## Primary display selection
+
+On laptops you can pin scanout to a specific connector — the internal eDP panel or an external HDMI/DP — so gamescope and River always use the display you expect.
+
+```bash
+starch-select-display            # whiptail TUI: auto / internal / external
+starch-select-display external   # non-interactive
+starch-select-display --show     # print current preference
+```
+
+The preference is stored per-user in `~/.config/starch/display.conf` and read by every start-* script on session launch:
+
+- **auto** (default) — external if a HDMI/DP cable is plugged in, else internal.
+- **internal** — always the laptop panel (`eDP-*` / `LVDS-*` / `DSI-*`).
+- **external** — first connected non-internal output; falls back to internal if nothing is plugged in.
+
+gamescope receives `--prefer-output <connector>`; River's init places the chosen output at x=0 and tiles any others to its right.
+
+---
+
+## Optimus (Precision 5550) notes
+
+The `optimus` profile differs from `discrete` in a few targeted ways:
+
+- **Intel iGPU drives scanout.** `WLR_DRM_DEVICES="<intel>:<nvidia>"` tells wlroots to open the Intel card first, so that's what gamescope / River treat as the display device. The NVIDIA card remains in the list as a secondary render device.
+- **NVIDIA is used via PRIME render offload.** `__NV_PRIME_RENDER_OFFLOAD=1`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, `__VK_LAYER_NV_optimus=NVIDIA_only`, `VK_ICD_FILENAMES=.../nvidia_icd.json` are all exported for the session, so Steam/games/Plex render on the T2000 Max-Q and only their final framebuffer copies to the iGPU.
+- **No `nvidia-drm fbdev=1`.** On the discrete profile nvidia takes over fbcon; on Optimus that fights with i915 and causes black screens. The Optimus modprobe file sets `fbdev=0`.
+- **`NVreg_DynamicPowerManagement=0x02`.** The T2000 enters D3cold when idle, which matters for battery life on a laptop.
+- **No HDR.** HDR scanout isn't supported end-to-end through the Intel display pipe, so `--hdr-enabled` is omitted from gamescope on this profile.
+- **modetest uses i915.** Refresh-rate probing in `start-steam` targets the i915 module instead of nvidia-drm.
+
+BIOS should be left at Hybrid/Optimus (not Discrete-only). The installer installs `mesa`, `vulkan-intel`, `lib32-vulkan-intel`, `intel-media-driver`, and `libva-utils` alongside the usual NVIDIA 32-bit userspace.
 
 ---
 

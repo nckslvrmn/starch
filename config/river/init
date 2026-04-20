@@ -20,9 +20,15 @@ _configure_displays() {
         return
     }
 
-    # wlr-randr reports refresh in mHz (e.g. 165000 = 165 Hz); divide by 1000.
-    # If values are already in Hz (older wlr-randr), the >1000 guard handles it.
-    while IFS=$'\t' read -r name width height refresh_mhz; do
+    # Primary output preference is resolved by the start-river script and
+    # exported as STARCH_PRIMARY_OUTPUT. When set, that output is enabled
+    # first (so its geometry anchors the layout) and all others are placed
+    # to its right in enumeration order.
+    local primary="${STARCH_PRIMARY_OUTPUT:-}"
+    local cursor_x=0
+
+    _apply_output() {
+        local name="$1" width="$2" height="$3" refresh_mhz="$4"
         local refresh_hz
         if [ "$refresh_mhz" -gt 1000 ] 2>/dev/null; then
             refresh_hz=$(( refresh_mhz / 1000 ))
@@ -37,18 +43,42 @@ _configure_displays() {
             scale="1.5"
         fi
 
-        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz scale=${scale}"
+        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz scale=${scale} pos=${cursor_x},0"
         wlr-randr --output "$name" --on \
             --mode "${width}x${height}@${refresh_hz}" \
-            --scale "$scale"
+            --scale "$scale" \
+            --pos "${cursor_x},0"
+
+        # Advance layout cursor by the logical (post-scale) width.
+        cursor_x=$(( cursor_x + width * 10 / $(awk -v s="$scale" 'BEGIN{print int(s*10)}') ))
+    }
+
+    # Two passes: primary first (if it's present and connected), then the rest.
+    local name width height refresh_mhz
+    if [ -n "$primary" ]; then
+        while IFS=$'\t' read -r name width height refresh_mhz; do
+            [ "$name" = "$primary" ] || continue
+            _apply_output "$name" "$width" "$height" "$refresh_mhz"
+        done < <(echo "$wlr_json" | jq -r '
+            .[] |
+            (.modes | max_by(.refresh)) as $m |
+            [.name,
+             ($m.width  | tostring),
+             ($m.height | tostring),
+             ($m.refresh | tostring)] | @tsv
+        ')
+    fi
+
+    while IFS=$'\t' read -r name width height refresh_mhz; do
+        [ "$name" = "$primary" ] && continue
+        _apply_output "$name" "$width" "$height" "$refresh_mhz"
     done < <(echo "$wlr_json" | jq -r '
         .[] |
         (.modes | max_by(.refresh)) as $m |
         [.name,
          ($m.width  | tostring),
          ($m.height | tostring),
-         ($m.refresh | tostring)] |
-        @tsv
+         ($m.refresh | tostring)] | @tsv
     ')
 }
 

@@ -1,5 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 # start-river — River Wayland compositor session launcher
+set -uo pipefail
+
+# shellcheck source=./starch-profile.sh
+. /usr/local/lib/starch/profile.sh
+starch_profile_init
 
 export XDG_CURRENT_DESKTOP=river
 export MOZ_ENABLE_WAYLAND=1
@@ -10,11 +15,10 @@ export XCURSOR_SIZE=32
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
 export ELECTRON_OZONE_PLATFORM_HINT=auto
 
-# NVIDIA
-export GBM_BACKEND=nvidia-drm
-export __GLX_VENDOR_LIBRARY_NAME=nvidia
-export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
-export WLR_NO_HARDWARE_CURSORS=1
-export ENABLE_IMPLICIT_SYNC=1
+starch_apply_gpu_env
+
+# Wait for WirePlumber to bind a real default sink so the media-key bindings
+# configured in config/river/init have something to target.
+starch_wait_for_audio river-session
 
 exec river

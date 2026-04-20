@@ -11,60 +11,43 @@ exec > >(tee -a "$LOGFILE") 2>&1
 echo "[plex-session] START $(date '+%Y-%m-%d %H:%M:%S')"
 
 # ---------------------------------------------------------------------------
-# Find the NVIDIA DRM device
+# Hardware profile + display preference
 # ---------------------------------------------------------------------------
 
-DRM_DEVICE="/dev/dri/card1"
-for card in /sys/class/drm/card[0-9]; do
-    vendor=$(cat "$card/device/vendor" 2>/dev/null) || continue
-    if [ "$vendor" = "0x10de" ]; then
-        DRM_DEVICE="/dev/dri/$(basename "$card")"
-        break
-    fi
-done
+# shellcheck source=./starch-profile.sh
+. /usr/local/lib/starch/profile.sh
+starch_profile_init
 
-echo "[plex-session] device: $DRM_DEVICE"
+echo "[plex-session] profile:        $STARCH_PROFILE"
+echo "[plex-session] display device: $STARCH_DISPLAY_CARD"
+echo "[plex-session] render device:  $STARCH_RENDER_CARD"
+echo "[plex-session] primary pref:   $STARCH_PRIMARY_PREF"
+echo "[plex-session] primary output: ${STARCH_PRIMARY_OUTPUT:-<any>}"
 
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 
-export WLR_DRM_DEVICES="$DRM_DEVICE"
-export GBM_BACKEND=nvidia-drm
-export __GLX_VENDOR_LIBRARY_NAME=nvidia
-export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
-export LIBVA_DRIVER_NAME=nvidia
-export NVD_BACKEND=direct
-export WLR_NO_HARDWARE_CURSORS=1
-export ENABLE_IMPLICIT_SYNC=1
+starch_apply_gpu_env
 
-# ---------------------------------------------------------------------------
-# Wait for a real default audio sink — not just the PipeWire daemon.
-# ---------------------------------------------------------------------------
-
-systemctl --user start pipewire.service pipewire-pulse.service wireplumber.service 2>/dev/null || true
-
-for i in $(seq 1 100); do
-    if wpctl get-volume @DEFAULT_AUDIO_SINK@ &>/dev/null; then
-        echo "[plex-session] Default audio sink ready after ~$((i * 100))ms"
-        break
-    fi
-    sleep 0.1
-done
-
-if ! wpctl get-volume @DEFAULT_AUDIO_SINK@ &>/dev/null; then
-    echo "[plex-session] WARNING: no default audio sink after 10s — launching anyway"
-fi
+# Wait for WirePlumber to bind a real default sink (see starch-profile.sh).
+starch_wait_for_audio plex-session
 
 # ---------------------------------------------------------------------------
 # Launch — gamescope with adaptive sync for judder-free video playback.
 # VRR lets gamescope present frames at the content's native cadence
 # (24fps, 30fps, etc.) instead of pulling down to a fixed refresh rate.
+# On optimus we drop --hdr-enabled: HDR scanout through the Intel display
+# pipe isn't supported end-to-end, and Plex will fall back to SDR anyway.
 # When Plex exits, gamescope exits, and SDDM takes over.
 # ---------------------------------------------------------------------------
 
-echo "[plex-session] launching gamescope"
-gamescope --backend drm -f --hdr-enabled --adaptive-sync -- \
+GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
+[ "$STARCH_PROFILE" = "discrete" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
+
+echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
+gamescope "${GAMESCOPE_ARGS[@]}" -- \
     flatpak run --device=dri \
     --env=LIBVA_DRIVER_NAME=nvidia \
     --env=NVD_BACKEND=direct \
