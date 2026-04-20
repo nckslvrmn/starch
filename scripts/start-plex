@@ -4,55 +4,32 @@
 # Log:    ~/.local/share/plex-session.log
 set -uo pipefail
 
-LOGFILE="$HOME/.local/share/plex-session.log"
-mkdir -p "$(dirname "$LOGFILE")"
-exec > >(tee -a "$LOGFILE") 2>&1
-
-echo "[plex-session] START $(date '+%Y-%m-%d %H:%M:%S')"
-
-# ---------------------------------------------------------------------------
-# Hardware profile + display preference
-# ---------------------------------------------------------------------------
-
 # shellcheck source=./starch-profile.sh
 . /usr/local/lib/starch/profile.sh
+
 starch_profile_init
-
-echo "[plex-session] profile:        $STARCH_PROFILE"
-echo "[plex-session] display device: $STARCH_DISPLAY_CARD"
-echo "[plex-session] render device:  $STARCH_RENDER_CARD"
-echo "[plex-session] primary pref:   $STARCH_PRIMARY_PREF"
-echo "[plex-session] primary output: ${STARCH_PRIMARY_OUTPUT:-<any>}"
-
-# ---------------------------------------------------------------------------
-# Environment
-# ---------------------------------------------------------------------------
-
+starch_session_begin plex
+starch_check_gpu_modules plex-session
 starch_apply_gpu_env
 
 # Wait for WirePlumber to bind a real default sink (see starch-profile.sh).
 starch_wait_for_audio plex-session
 
-# ---------------------------------------------------------------------------
+# Flatpak sandbox inherits nothing from the host — profile-specific env vars
+# must be forwarded explicitly. starch_flatpak_env_args emits the right
+# --env=K=V args for the active profile.
+mapfile -t FP_ENV < <(starch_flatpak_env_args)
+
 # Launch — gamescope with adaptive sync for judder-free video playback.
 # VRR lets gamescope present frames at the content's native cadence
 # (24fps, 30fps, etc.) instead of pulling down to a fixed refresh rate.
-# On optimus we drop --hdr-enabled: HDR scanout through the Intel display
-# pipe isn't supported end-to-end, and Plex will fall back to SDR anyway.
+# HDR scanout is only viable end-to-end on the nvidia profile.
 # When Plex exits, gamescope exits, and SDDM takes over.
-# ---------------------------------------------------------------------------
 
 GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
-[ "$STARCH_PROFILE" = "discrete" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
+[ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
-gamescope "${GAMESCOPE_ARGS[@]}" -- \
-    flatpak run --device=dri \
-    --env=LIBVA_DRIVER_NAME=nvidia \
-    --env=NVD_BACKEND=direct \
-    --env=__GLX_VENDOR_LIBRARY_NAME=nvidia \
-    --env=GBM_BACKEND=nvidia-drm \
-    tv.plex.PlexHTPC
-
-echo "[plex-session] END $(date '+%Y-%m-%d %H:%M:%S')"
+exec gamescope "${GAMESCOPE_ARGS[@]}" -- \
+    flatpak run --device=dri "${FP_ENV[@]}" tv.plex.PlexHTPC
