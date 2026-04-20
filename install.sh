@@ -608,14 +608,28 @@ info "starch installation complete!"
 echo "================================================================"
 echo ""
 echo "  Hardware profile: $HW_PROFILE"
-if [ "$HW_PROFILE" = "optimus" ]; then
-echo "    BIOS: leave graphics set to 'Hybrid / Optimus' (NOT Discrete only)."
-echo "    Intel iGPU drives displays; NVIDIA handles PRIME render offload."
+case "$HW_PROFILE" in
+    optimus)
+        echo "    BIOS: leave graphics set to 'Hybrid / Optimus' (NOT Discrete only)."
+        echo "    Intel iGPU drives displays; NVIDIA handles PRIME render offload."
+        ;;
+    nvidia)
+        echo "    BIOS: set graphics to 'Discrete GPU Only' if available."
+        ;;
+    amd)
+        echo "    amdgpu drives both scanout and rendering. No NVIDIA stack involved."
+        ;;
+esac
+echo ""
+
+if [ "$HW_PROFILE" != "amd" ]; then
+    echo "  Before rebooting, verify your bootloader kernel cmdline contains:"
+    echo "    nvidia_drm.modeset=1"
+    if ! grep -q 'nvidia_drm\.modeset=1' /proc/cmdline 2>/dev/null; then
+        warn "  Current /proc/cmdline is missing nvidia_drm.modeset=1 — add it before rebooting."
+    fi
+    echo ""
 fi
-echo ""
-echo "  Before rebooting, verify your systemd-boot entry contains:"
-echo "    nvidia_drm.modeset=1"
-echo ""
 echo "  REBOOT to apply:"
 echo "    - Early module loading (mkinitcpio change)"
 echo "    - Group membership changes for $GAMING_USER"
