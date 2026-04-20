@@ -31,8 +31,11 @@ GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
-    # Intel Vulkan for compositing (see start-steam comments).
-    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+    if [ "${STARCH_OUTPUT_CARD:-}" = "$STARCH_NVIDIA_CARD" ]; then
+        GAMESCOPE_ARGS+=(--prefer-vk-device 10de)
+    else
+        GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+    fi
 fi
 
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"

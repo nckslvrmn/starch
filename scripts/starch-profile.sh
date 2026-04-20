@@ -78,7 +78,8 @@ _starch_find_cards() {
 # without a running Wayland session.
 
 _starch_list_connectors() {
-    local card_basename="${STARCH_DISPLAY_CARD##*/}"
+    local card="${1:-$STARCH_DISPLAY_CARD}"
+    local card_basename="${card##*/}"
     local sys
     for sys in /sys/class/drm/"$card_basename"-*; do
         [ -r "$sys/status" ] || continue
@@ -122,22 +123,79 @@ _starch_load_user_pref() {
     fi
 }
 
+# Find the first connected connector matching a filter, searching across
+# multiple DRM cards.  Sets two variables:
+#   _found_output  — connector name (e.g. HDMI-A-1)
+#   _found_card    — /dev/dri/cardN that owns it
+_starch_first_connected_any_card() {
+    local filter="$1"  # internal | external | any
+    shift
+    local cards=("$@")  # list of /dev/dri/cardN to search
+    _found_output=""
+    _found_card=""
+    local card name status
+    for card in "${cards[@]}"; do
+        [ -n "$card" ] || continue
+        while read -r name status; do
+            [ "$status" = "connected" ] || continue
+            case "$filter" in
+                internal) _starch_is_internal_connector "$name" || continue ;;
+                external) _starch_is_internal_connector "$name" && continue ;;
+            esac
+            _found_output="$name"
+            _found_card="$card"
+            return 0
+        done < <(_starch_list_connectors "$card")
+    done
+    return 1
+}
+
 _starch_resolve_primary_output() {
     _starch_load_user_pref
     STARCH_PRIMARY_OUTPUT=""
+    STARCH_OUTPUT_CARD=""  # which card owns the chosen output
+
+    # On optimus, external outputs (HDMI/DP) are often wired to the NVIDIA
+    # card while the internal eDP goes through Intel.  Search both cards
+    # so we can find the external output regardless of which GPU owns it.
+    local search_cards=("$STARCH_DISPLAY_CARD")
+    if [ "$STARCH_PROFILE" = "optimus" ]; then
+        # Search Intel first (has eDP), then NVIDIA (has HDMI/DP)
+        search_cards=()
+        [ -n "$STARCH_INTEL_CARD" ]  && search_cards+=("$STARCH_INTEL_CARD")
+        [ -n "$STARCH_NVIDIA_CARD" ] && search_cards+=("$STARCH_NVIDIA_CARD")
+    fi
+
     case "$STARCH_PRIMARY_PREF" in
         internal)
-            STARCH_PRIMARY_OUTPUT="$(_starch_first_connected internal || true)"
+            _starch_first_connected_any_card internal "${search_cards[@]}" && {
+                STARCH_PRIMARY_OUTPUT="$_found_output"
+                STARCH_OUTPUT_CARD="$_found_card"
+            }
             ;;
         external)
-            STARCH_PRIMARY_OUTPUT="$(_starch_first_connected external || true)"
-            [ -z "$STARCH_PRIMARY_OUTPUT" ] && \
-                STARCH_PRIMARY_OUTPUT="$(_starch_first_connected internal || true)"
+            _starch_first_connected_any_card external "${search_cards[@]}" && {
+                STARCH_PRIMARY_OUTPUT="$_found_output"
+                STARCH_OUTPUT_CARD="$_found_card"
+            }
+            if [ -z "$STARCH_PRIMARY_OUTPUT" ]; then
+                _starch_first_connected_any_card internal "${search_cards[@]}" && {
+                    STARCH_PRIMARY_OUTPUT="$_found_output"
+                    STARCH_OUTPUT_CARD="$_found_card"
+                }
+            fi
             ;;
         auto)
-            STARCH_PRIMARY_OUTPUT="$(_starch_first_connected external || true)"
-            [ -z "$STARCH_PRIMARY_OUTPUT" ] && \
-                STARCH_PRIMARY_OUTPUT="$(_starch_first_connected internal || true)"
+            _starch_first_connected_any_card external "${search_cards[@]}" && {
+                STARCH_PRIMARY_OUTPUT="$_found_output"
+                STARCH_OUTPUT_CARD="$_found_card"
+            }
+            if [ -z "$STARCH_PRIMARY_OUTPUT" ]; then
+                _starch_first_connected_any_card internal "${search_cards[@]}" && {
+                    STARCH_PRIMARY_OUTPUT="$_found_output"
+                    STARCH_OUTPUT_CARD="$_found_card"
+                }
+            fi
             ;;
     esac
 }
@@ -168,7 +226,7 @@ starch_profile_init() {
     export STARCH_PROFILE \
            STARCH_NVIDIA_CARD STARCH_INTEL_CARD STARCH_AMD_CARD \
            STARCH_DISPLAY_CARD STARCH_RENDER_CARD \
-           STARCH_PRIMARY_PREF STARCH_PRIMARY_OUTPUT
+           STARCH_PRIMARY_PREF STARCH_PRIMARY_OUTPUT STARCH_OUTPUT_CARD
 }
 
 # ---- kernel-module sanity check -------------------------------------------
@@ -234,7 +292,7 @@ starch_session_begin() {
     echo "[${name}-session] display device: ${STARCH_DISPLAY_CARD:-<none>}"
     echo "[${name}-session] render device:  ${STARCH_RENDER_CARD:-<none>}"
     echo "[${name}-session] primary pref:   ${STARCH_PRIMARY_PREF:-auto}"
-    echo "[${name}-session] primary output: ${STARCH_PRIMARY_OUTPUT:-<any>}"
+    echo "[${name}-session] primary output: ${STARCH_PRIMARY_OUTPUT:-<any>} (on ${STARCH_OUTPUT_CARD:-<unknown>})"
 
     trap '_starch_session_end $?' EXIT
 }
@@ -335,30 +393,32 @@ starch_apply_gpu_env() {
             export NVD_BACKEND=direct
             ;;
         optimus)
-            # Compositor (River / gamescope) MUST scan out on the Intel iGPU
-            # and use Mesa's GBM / EGL / Vulkan for its own rendering context.
-            # Setting GBM_BACKEND=nvidia-drm or forcing the NVIDIA EGL/VK ICDs
-            # here would make the compositor try to create an EGL display on
-            # the NVIDIA card — which has NO display outputs on an Optimus
-            # laptop — causing:
-            #   - "unable to open /dev/dri/cardN as KMS device"
-            #   - "failed to create EGL display/context"
-            #   - "could not match drm and vulkan device"
+            # Optimus: the chosen output determines which GPU does KMS scanout.
             #
-            # NVIDIA PRIME offload env vars belong on *child* apps (games,
-            # Steam, Plex), not on the compositor.  Use starch_prime_env or
-            # starch_flatpak_env_args to pass them to child processes.
-            export WLR_DRM_DEVICES="$STARCH_INTEL_CARD"
+            # Internal display (eDP) → Intel iGPU owns it → Mesa stack
+            # External display (HDMI/DP) → often wired to NVIDIA → NVIDIA stack
+            #
+            # STARCH_OUTPUT_CARD is set by _starch_resolve_primary_output
+            # after scanning connectors on both cards.
 
-            # Default ALL apps to Intel's Mesa stack.  Without these, every
-            # Wayland app (browsers, Electron, etc.) iterates through NVIDIA's
-            # EGL/Vulkan ICDs on startup — waking the dGPU from D3cold,
-            # adding ~1 s latency, and often crashing in
-            # libnvidia-egl-wayland.so.  Setting Mesa-first defaults avoids
-            # all of that.  Apps that need the NVIDIA dGPU get explicit PRIME
-            # offload vars via starch_prime_env.
-            export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
-            export __GLX_VENDOR_LIBRARY_NAME=mesa
+            if [ "${STARCH_OUTPUT_CARD:-}" = "$STARCH_NVIDIA_CARD" ]; then
+                # External output on NVIDIA — compositor must use NVIDIA for
+                # KMS, GBM, EGL, and Vulkan.  This is effectively the nvidia
+                # profile but on an optimus machine.
+                echo "[starch] optimus: output on NVIDIA card → NVIDIA compositor env"
+                export WLR_DRM_DEVICES="$STARCH_NVIDIA_CARD"
+                export GBM_BACKEND=nvidia-drm
+                export __GLX_VENDOR_LIBRARY_NAME=nvidia
+                export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+            else
+                # Internal (eDP) or output on Intel — Intel does KMS, Mesa
+                # handles GBM/EGL/Vulkan.  NVIDIA PRIME offload vars go on
+                # child apps only (starch_prime_env).
+                echo "[starch] optimus: output on Intel card → Mesa compositor env"
+                export WLR_DRM_DEVICES="$STARCH_INTEL_CARD"
+                export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+                export __GLX_VENDOR_LIBRARY_NAME=mesa
+            fi
 
             # VA-API video decode still goes through NVIDIA.
             export LIBVA_DRIVER_NAME=nvidia

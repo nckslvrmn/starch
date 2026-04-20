@@ -34,16 +34,19 @@ GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
-    # Gamescope must use Intel Vulkan for compositing on optimus, otherwise it
-    # renders buffers with NVIDIA modifiers that Intel KMS can't scanout
-    # → drmModeAddFB2WithModifiers: invalid argument.
+    # Gamescope's Vulkan device must match its KMS device, otherwise buffer
+    # modifiers are incompatible → drmModeAddFB2WithModifiers: invalid argument.
     #
-    # WLR_DRM_DEVICES (set by starch_apply_gpu_env) steers the DRM backend to
-    # the Intel card.  --prefer-vk-device selects Intel ANV for Vulkan.
-    # Games inside gamescope still use NVIDIA via PRIME offload env.
-    #
-    # 8086 = Intel PCI vendor ID (substring match)
-    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+    # Which GPU does KMS depends on the selected output:
+    #   eDP (Intel)  → --prefer-vk-device 8086 (Intel ANV)
+    #   HDMI (NVIDIA) → --prefer-vk-device 10de (NVIDIA)
+    if [ "${STARCH_OUTPUT_CARD:-}" = "$STARCH_NVIDIA_CARD" ]; then
+        GAMESCOPE_ARGS+=(--prefer-vk-device 10de)
+        echo "[steam-session] optimus: HDMI on NVIDIA → NVIDIA Vulkan + KMS"
+    else
+        GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+        echo "[steam-session] optimus: eDP on Intel → Intel Vulkan + KMS"
+    fi
 fi
 
 # On optimus the compositor (gamescope) runs on the Intel iGPU for KMS;
