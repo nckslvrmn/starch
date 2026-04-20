@@ -61,28 +61,36 @@ info "Installing starch gaming session for user: $GAMING_USER"
 # Hardware profile detection
 # ---------------------------------------------------------------------------
 #
-# discrete — NVIDIA-only system (BIOS set to Discrete GPU Only).
-# optimus  — Intel iGPU + NVIDIA dGPU hybrid. Intel owns the display pipe,
-#            NVIDIA is used for render offload via PRIME (e.g. Precision 5550).
+# nvidia  — NVIDIA-only system (BIOS set to Discrete GPU Only on laptops).
+# optimus — Intel iGPU + NVIDIA dGPU hybrid. Intel owns the display pipe,
+#           NVIDIA is used for render offload via PRIME (e.g. Precision 5550).
+# amd     — AMD GPU (desktop dGPU or APU). amdgpu drives everything.
 
 detect_profile() {
     if ! command -v lspci >/dev/null 2>&1; then
-        echo "discrete"; return
+        echo "nvidia"; return
     fi
-    local has_intel has_nvidia
-    has_intel=$(lspci -nn | grep -Ei 'VGA|3D|Display' | grep -c '\[8086:' || true)
-    has_nvidia=$(lspci -nn | grep -Ei 'VGA|3D|Display' | grep -c '\[10de:' || true)
+    local gpus has_intel has_nvidia has_amd
+    gpus=$(lspci -nn | grep -Ei 'VGA|3D|Display')
+    has_intel=$(echo "$gpus"  | grep -c '\[8086:' || true)
+    has_nvidia=$(echo "$gpus" | grep -c '\[10de:' || true)
+    has_amd=$(echo "$gpus"    | grep -c '\[1002:' || true)
     if [ "$has_intel" -gt 0 ] && [ "$has_nvidia" -gt 0 ]; then
         echo "optimus"
+    elif [ "$has_nvidia" -gt 0 ]; then
+        echo "nvidia"
+    elif [ "$has_amd" -gt 0 ]; then
+        echo "amd"
     else
-        echo "discrete"
+        echo "nvidia"
     fi
 }
 
 if [ -n "${HW_PROFILE:-}" ]; then
     case "$HW_PROFILE" in
-        discrete|optimus) ;;
-        *) error "Invalid HW_PROFILE='$HW_PROFILE' (expected 'discrete' or 'optimus')"; exit 1 ;;
+        discrete) HW_PROFILE="nvidia" ;;   # legacy alias
+        nvidia|optimus|amd) ;;
+        *) error "Invalid HW_PROFILE='$HW_PROFILE' (expected nvidia | optimus | amd)"; exit 1 ;;
     esac
     info "Hardware profile (from HW_PROFILE env): $HW_PROFILE"
 else
