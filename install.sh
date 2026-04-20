@@ -312,10 +312,13 @@ esac
 install -Dm644 "$GAMEMODE_SRC" /etc/gamemode.ini
 info "  /etc/gamemode.ini ($HW_PROFILE)"
 
-# NetworkManager — use iwd as WiFi backend
+# NetworkManager — use iwd as WiFi backend + ensure all interfaces are managed
 install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/iwd-backend.conf" \
     /etc/NetworkManager/conf.d/iwd-backend.conf
 info "  /etc/NetworkManager/conf.d/iwd-backend.conf"
+install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/starch.conf" \
+    /etc/NetworkManager/conf.d/starch.conf
+info "  /etc/NetworkManager/conf.d/starch.conf"
 
 # SDDM display manager — Wayland greeter mode (template the default user)
 sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.conf" \
