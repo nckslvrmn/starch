@@ -146,12 +146,6 @@ PACKAGES=(
     # Brightness control (media keys in river)
     brightnessctl
 
-    # River 0.4 window manager (river-pwm) — Python dependencies
-    python
-    python-pip
-    python-pypubsub
-    python-cairo
-
     # Network manager — required by Steam for network status via D-Bus
     networkmanager
 
@@ -506,22 +500,6 @@ install -Dm755 "$SCRIPT_DIR/config/river/init" \
     "$GAMING_HOME/.config/river/init"
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/river/init"
 info "  $GAMING_HOME/.config/river/init"
-
-install -Dm644 "$SCRIPT_DIR/config/river/pwm.py" \
-    "$GAMING_HOME/.config/river/pwm.py"
-chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/river/pwm.py"
-info "  $GAMING_HOME/.config/river/pwm.py"
-
-# river-pwm — Python window manager for River 0.4
-# Install from GitHub if not already present.
-if ! sudo -u "$GAMING_USER" python3 -c 'import pwm' 2>/dev/null; then
-    info "Installing river-pwm from GitHub..."
-    sudo -u "$GAMING_USER" pip install --user --break-system-packages \
-        git+https://github.com/pinpox/river-pwm.git 2>&1 | tail -3
-    info "  river-pwm installed"
-else
-    info "  river-pwm already installed"
-fi
 
 # Brave browser Wayland flags (HiDPI + native Wayland rendering)
 install -Dm644 "$SCRIPT_DIR/config/brave-flags.conf" \

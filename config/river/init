@@ -1,20 +1,11 @@
 #!/bin/bash
-# River 0.4 init — launches the window manager and autostart programs.
-#
-# River 0.4 split the compositor and window manager into separate processes.
-# The compositor (river) handles rendering/KMS; all keybindings, tiling, and
-# focus policy live in the window manager (river-pwm for us).
-#
-# Display configuration (wlr-randr) is handled inside pwm.py or can be done
-# here before the WM starts if needed.
-
-STARCH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/river"
 
 # ---------------------------------------------------------------------------
 # Display configuration via wlr-randr
 #
-# River 0.4 still exposes wlr-randr, so we configure outputs here before
-# the WM starts laying out windows.
+# river is the compositor here, so wlr-randr --json works.
+# Reads all connected outputs, picks the mode with the highest refresh rate,
+# and applies it with HiDPI scaling.
 # ---------------------------------------------------------------------------
 
 _configure_displays() {
@@ -23,15 +14,16 @@ _configure_displays() {
         return
     fi
 
-    # Give the compositor a moment to enumerate outputs
-    sleep 0.5
-
     local wlr_json
     wlr_json=$(wlr-randr --json 2>/dev/null) || {
         echo "[river/init] wlr-randr failed — skipping display configuration"
         return
     }
 
+    # Primary output preference is resolved by the start-river script and
+    # exported as STARCH_PRIMARY_OUTPUT. When set, that output is enabled
+    # first (so its geometry anchors the layout) and all others are placed
+    # to its right in enumeration order.
     local primary="${STARCH_PRIMARY_OUTPUT:-}"
     local cursor_x=0
 
@@ -57,10 +49,11 @@ _configure_displays() {
             --scale "$scale" \
             --pos "${cursor_x},0"
 
+        # Advance layout cursor by the logical (post-scale) width.
         cursor_x=$(( cursor_x + width * 10 / $(awk -v s="$scale" 'BEGIN{print int(s*10)}') ))
     }
 
-    # Two passes: primary first, then the rest.
+    # Two passes: primary first (if it's present and connected), then the rest.
     local name width height refresh_mhz
     if [ -n "$primary" ]; then
         while IFS=$'\t' read -r name width height refresh_mhz; do
@@ -89,38 +82,43 @@ _configure_displays() {
     ')
 }
 
-_configure_displays &
+_configure_displays
 
 # ---------------------------------------------------------------------------
-# Media key daemons (volume / brightness)
-#
-# river-pwm handles keybindings registered via its protocol, but media keys
-# are simpler to wire up here via a small background helper since they just
-# spawn shell commands and don't need window-management state.
+# Key bindings
 # ---------------------------------------------------------------------------
 
-_media_keys_via_wev() {
-    # If river-pwm gains raw-keybinding support for media keys, remove this.
-    # For now we rely on the WM's custom_keybindings being sufficient.
-    # Media keys are handled via custom bindings if the WM supports them,
-    # otherwise users can run something like `swhkd` or `wev` here.
-    true
-}
+riverctl map normal Alt Shift Tab focus-prev
+riverctl map normal Alt Tab       focus-next
+riverctl map normal Alt Tab       zoom
+riverctl map normal Super Space   spawn "bemenu-run --ch 30 --accept-single -i -c -W 0.33 --hp 10 --fn \"FiraCodeNerdFont 24\" -p \"  run  \""
+riverctl map normal Super+Shift E exit
+
+# Tiling (riversnap — commands sent to the running layout daemon)
+riverctl map normal Super Left  send-layout-cmd riversnap "left"
+riverctl map normal Super Right send-layout-cmd riversnap "right"
+riverctl map normal Super Up    send-layout-cmd riversnap "full"
+
+# Volume (media keys)
+riverctl map normal None XF86AudioRaiseVolume  spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+'
+riverctl map normal None XF86AudioLowerVolume  spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-'
+riverctl map normal None XF86AudioMute         spawn 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle'
+
+# Brightness (media keys)
+riverctl map normal None XF86MonBrightnessUp   spawn 'brightnessctl set 5%+'
+riverctl map normal None XF86MonBrightnessDown spawn 'brightnessctl set 5%-'
 
 # ---------------------------------------------------------------------------
-# Window manager — river-pwm
+# Appearance
 # ---------------------------------------------------------------------------
 
-echo "[river/init] starting river-pwm"
-python3 "$STARCH_DIR/pwm.py" &
-PWM_PID=$!
+riverctl background-color 0x000000
 
 # ---------------------------------------------------------------------------
 # Autostart
 # ---------------------------------------------------------------------------
 
-sleep 1  # Let the WM initialize before spawning windows
-/usr/bin/ghostty &
+riversnap &
+riverctl default-layout riversnap
 
-# Wait for the WM to exit (River stays alive; Ctrl+Alt+Delete exits river)
-wait $PWM_PID
+/usr/bin/ghostty &
