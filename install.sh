@@ -1,6 +1,5 @@
 #!/bin/bash
 # install.sh — Deploy starch gaming session to an Arch Linux system
-# Targets: Intel CPU + NVIDIA GPU (discrete-only or Optimus hybrid)
 #
 # Run as root from the starch/ directory:
 #   sudo bash install.sh
@@ -9,8 +8,9 @@
 #   sudo GAMING_USER=myuser bash install.sh
 #
 # Hardware profile — auto-detected from lspci, or override explicitly:
-#   sudo HW_PROFILE=discrete bash install.sh   # NVIDIA-only (desktop, Legion Pro 7)
-#   sudo HW_PROFILE=optimus  bash install.sh   # Intel iGPU + NVIDIA dGPU (Precision 5550)
+#   sudo HW_PROFILE=nvidia  bash install.sh   # NVIDIA-only (desktop, Legion Pro 7)
+#   sudo HW_PROFILE=optimus bash install.sh   # Intel iGPU + NVIDIA dGPU (Precision 5550)
+#   sudo HW_PROFILE=amd     bash install.sh   # AMD CPU + AMD GPU / APU
 
 set -euo pipefail
 
