@@ -6,10 +6,11 @@ SteamOS-like console sessions and a River desktop on Arch Linux.
 
 | Profile    | Example hardware                                 | GPU mode                                             |
 |------------|--------------------------------------------------|------------------------------------------------------|
-| `discrete` | Lenovo Legion Pro 7 Gen 8 (13900HX + RTX 4090M)  | NVIDIA-only, BIOS set to Discrete GPU Only           |
+| `nvidia`   | Lenovo Legion Pro 7 Gen 8 (13900HX + RTX 4090M)  | NVIDIA-only, BIOS set to Discrete GPU Only           |
 | `optimus`  | Dell Precision 5550 (i7-10xxH + T2000 Max-Q)     | Hybrid — Intel iGPU scans out, NVIDIA PRIME renders  |
+| `amd`      | Any AMD desktop GPU / APU                        | amdgpu drives both scanout and rendering             |
 
-The installer auto-detects which profile applies from `lspci`, or you can override with `sudo HW_PROFILE=optimus bash install.sh`.
+The installer auto-detects which profile applies from `lspci`, or you can override with `sudo HW_PROFILE=amd bash install.sh` (values: `nvidia`, `optimus`, `amd`). The legacy name `discrete` is still accepted as a synonym for `nvidia`.
 
 ---
 
