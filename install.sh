@@ -538,7 +538,7 @@ chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config" "$GAMING_HOME/.local" 
 
 step "Configuring user groups for $GAMING_USER"
 
-for group in input video audio seat gamemode; do
+for group in input video audio seat gamemode lp; do
     if getent group "$group" &>/dev/null; then
         usermod -aG "$group" "$GAMING_USER"
         info "  Added $GAMING_USER to group: $group"
