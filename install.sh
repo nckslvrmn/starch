@@ -544,15 +544,21 @@ else
     info "  NetworkManager.service already enabled"
 fi
 
-# NVIDIA power management — required when NVreg_PreserveVideoMemoryAllocations=1 is set.
-for svc in nvidia-suspend nvidia-hibernate nvidia-resume; do
-    if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
-        systemctl enable "${svc}.service"
-        info "  Enabled: ${svc}.service"
-    else
-        warn "  ${svc}.service not found — install nvidia-utils if not present"
-    fi
-done
+# NVIDIA power management — required when NVreg_PreserveVideoMemoryAllocations=1
+# is set (suspend/hibernate/resume) and nvidia-powerd for dynamic clocking on
+# Turing+. None of this applies on AMD.
+if [ "$HW_PROFILE" != "amd" ]; then
+    for svc in nvidia-suspend nvidia-hibernate nvidia-resume nvidia-powerd; do
+        if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
+            systemctl enable "${svc}.service"
+            info "  Enabled: ${svc}.service"
+        else
+            warn "  ${svc}.service not found — install nvidia-utils if not present"
+        fi
+    done
+else
+    info "  amd profile: skipping nvidia-* power-management services"
+fi
 
 # ---------------------------------------------------------------------------
 # 10. uinput module — load immediately and persist across reboots
