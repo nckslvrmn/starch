@@ -116,9 +116,6 @@ PACKAGES=(
     lib32-vulkan-icd-loader
     lib32-mesa
 
-    # NVIDIA 32-bit userspace libs (needed by most games via Proton/WINE)
-    lib32-nvidia-utils
-
     # Xwayland (for X11 games running under Proton)
     xorg-xwayland
 
@@ -178,18 +175,35 @@ PACKAGES=(
     libnewt
 )
 
-# Intel iGPU userspace — only needed on the Optimus profile. These provide
-# the i915 Mesa/Vulkan drivers so the iGPU can scan out while NVIDIA handles
-# render offload via PRIME.
-if [ "$HW_PROFILE" = "optimus" ]; then
-    PACKAGES+=(
-        mesa
-        vulkan-intel
-        lib32-vulkan-intel
-        intel-media-driver
-        libva-utils
-    )
-fi
+# Per-profile GPU userspace stacks.
+case "$HW_PROFILE" in
+    nvidia)
+        # NVIDIA 32-bit userspace libs (needed by most games via Proton/WINE).
+        PACKAGES+=(lib32-nvidia-utils)
+        ;;
+    optimus)
+        # NVIDIA for render offload + Intel for scanout/decode.
+        PACKAGES+=(
+            lib32-nvidia-utils
+            mesa
+            vulkan-intel
+            lib32-vulkan-intel
+            intel-media-driver
+            libva-utils
+        )
+        ;;
+    amd)
+        # RADV Vulkan + radeonsi VA-API. No NVIDIA stack involved.
+        PACKAGES+=(
+            mesa
+            vulkan-radeon
+            lib32-vulkan-radeon
+            libva-mesa-driver
+            lib32-libva-mesa-driver
+            libva-utils
+        )
+        ;;
+esac
 
 # Compute which packages aren't already installed.
 MISSING=()
