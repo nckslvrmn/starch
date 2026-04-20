@@ -28,14 +28,10 @@ mapfile -t FP_ENV < <(starch_flatpak_env_args)
 
 GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
 [ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
-[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
-    if [ "${STARCH_OUTPUT_CARD:-}" = "$STARCH_NVIDIA_CARD" ]; then
-        GAMESCOPE_ARGS+=(--prefer-vk-device 10de)
-    else
-        GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
-    fi
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
 fi
 
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"

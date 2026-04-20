@@ -31,22 +31,16 @@ starch_wait_for_audio steam-session
 
 GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync)
 [ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
-[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
+
+# Output selection: gamescope uses OUTPUT_CONNECTOR env var (--prefer-output
+# was removed in newer versions).
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
-    # Gamescope's Vulkan device must match its KMS device, otherwise buffer
-    # modifiers are incompatible → drmModeAddFB2WithModifiers: invalid argument.
-    #
-    # Which GPU does KMS depends on the selected output:
-    #   eDP (Intel)  → --prefer-vk-device 8086 (Intel ANV)
-    #   HDMI (NVIDIA) → --prefer-vk-device 10de (NVIDIA)
-    if [ "${STARCH_OUTPUT_CARD:-}" = "$STARCH_NVIDIA_CARD" ]; then
-        GAMESCOPE_ARGS+=(--prefer-vk-device 10de)
-        echo "[steam-session] optimus: HDMI on NVIDIA → NVIDIA Vulkan + KMS"
-    else
-        GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
-        echo "[steam-session] optimus: eDP on Intel → Intel Vulkan + KMS"
-    fi
+    # MUX-less Optimus: Intel owns ALL display outputs (eDP + HDMI + USB-C).
+    # NVIDIA is purely a render offload device with no connectors.
+    # Use Intel Vulkan for gamescope's compositor to match Intel KMS.
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
 fi
 
 # On optimus the compositor (gamescope) runs on the Intel iGPU for KMS;
