@@ -153,29 +153,71 @@ starch_profile_init() {
 # ---- audio sink readiness -------------------------------------------------
 #
 # SDDM launches the user session the instant it unlocks, but WirePlumber may
-# not have bound a sink yet — that's the classic "boot video plays sound,
-# nothing after that does" bug. Poll wpctl until a real default sink exists.
+# still be probing sinks. `wpctl get-volume @DEFAULT_AUDIO_SINK@` flips to
+# "ok" the moment *any* default is elected, including two states that look
+# fine but break audio for anything launched during them:
 #
-# Callers pass a short tag used in log lines so each session's log shows the
-# same format (e.g. "[steam-session] Default audio sink ready after ...ms").
+#   1. An `auto_null` fallback sink that WirePlumber publishes while it's
+#      still discovering real hardware. Any stream opened against it goes
+#      to /dev/null once the real sink takes over.
+#
+#   2. A brief window where HDA is the default, then HDMI/Bluetooth replaces
+#      it a few hundred ms later after policy runs. Steam's gamepadui opens
+#      its audio stream on the first default and never migrates — the Steam
+#      boot video has sound, nothing after that does.
+#
+# This helper instead waits for the default sink's `node.name` to be:
+#
+#   - non-empty and not `auto_null*`, AND
+#   - identical across ~500 ms of samples (i.e. WirePlumber's policy pass
+#     has finished electing the final sink).
+#
+# Exits 0 when a stable real default is observed; exits 1 and warns if the
+# timeout expires, but still allows the session to launch.
+#
+# Tunables (positional): tag, overall_timeout_ds, stable_ds
+#   tag               — log prefix, e.g. "steam-session"
+#   overall_timeout_ds — max wait in deciseconds (default 150 = 15s)
+#   stable_ds         — how many consecutive matches equal "stable"
+#                       (default 5 ≈ 500ms; raise on noisy setups).
 
 starch_wait_for_audio() {
     local tag="${1:-starch}"
-    local timeout_ds="${2:-100}"   # deciseconds (default 10s)
+    local timeout_ds="${2:-150}"
+    local stable_ds="${3:-5}"
 
     systemctl --user start pipewire.service pipewire-pulse.service \
         wireplumber.service 2>/dev/null || true
 
-    local i
+    local i cur last="" stable=0 t0 now dt
+    t0=$(date +%s%3N 2>/dev/null || echo 0)
+
     for i in $(seq 1 "$timeout_ds"); do
-        if wpctl get-volume @DEFAULT_AUDIO_SINK@ &>/dev/null; then
-            echo "[$tag] Default audio sink ready after ~$((i * 100))ms"
-            return 0
+        # node.name of the current default sink, or empty if there is none.
+        cur=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null \
+            | awk -F '"' '/^[[:space:]]*\*?[[:space:]]*node\.name[[:space:]]*=/ {print $2; exit}')
+
+        # Discard the known fallback names — they count as "not ready".
+        case "$cur" in
+            auto_null*|dummy*|"") cur="" ;;
+        esac
+
+        if [ -n "$cur" ] && [ "$cur" = "$last" ]; then
+            stable=$((stable + 1))
+            if [ "$stable" -ge "$stable_ds" ]; then
+                now=$(date +%s%3N 2>/dev/null || echo 0)
+                dt=$(( now - t0 ))
+                echo "[$tag] Audio sink ready: $cur (stable after ~${dt}ms)"
+                return 0
+            fi
+        else
+            stable=0
+            last="$cur"
         fi
         sleep 0.1
     done
 
-    echo "[$tag] WARNING: no default audio sink after $((timeout_ds / 10))s — launching anyway"
+    echo "[$tag] WARNING: audio sink did not stabilise after $((timeout_ds / 10))s (last: ${last:-none}) — launching anyway"
     return 1
 }
 
