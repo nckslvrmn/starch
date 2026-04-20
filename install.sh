@@ -140,8 +140,8 @@ PACKAGES=(
     # JSON parsing for wlr-randr output in river/init
     jq
 
-    # Wayland-native dmenu replacement
-    bemenu
+    # Wayland-native application launcher
+    fuzzel
 
     # Brightness control (media keys in river)
     brightnessctl
@@ -496,6 +496,18 @@ step "Installing River configuration for $GAMING_USER"
 
 GAMING_HOME=$(eval echo ~"$GAMING_USER")
 GAMING_GROUP=$(id -gn "$GAMING_USER")
+
+# Pre-create config directories owned by the user BEFORE install(1) runs.
+# install -D creates parent dirs as root when run from a root script, which
+# makes ~/.config root-owned and breaks every app that writes to XDG_CONFIG_HOME
+# (Firefox, Steam, etc.).
+for _dir in \
+    "$GAMING_HOME/.config/river" \
+    "$GAMING_HOME/.config/xdg-desktop-portal" \
+    "$GAMING_HOME/.local/share"; do
+    install -dm755 -o "$GAMING_USER" -g "$GAMING_GROUP" "$_dir"
+done
+
 install -Dm755 "$SCRIPT_DIR/config/river/init" \
     "$GAMING_HOME/.config/river/init"
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/river/init"
@@ -512,6 +524,10 @@ install -Dm644 "$SCRIPT_DIR/config/xdg-desktop-portal/portals.conf" \
     "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
 info "  $GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
+
+# Fix ownership of ~/.config and all parent dirs that install(1) may have
+# created as root in this or previous runs.
+chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config" "$GAMING_HOME/.local" "$GAMING_HOME/.local/share" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 8. User groups

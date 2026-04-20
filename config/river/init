@@ -91,7 +91,7 @@ _configure_displays
 riverctl map normal Alt Shift Tab focus-prev
 riverctl map normal Alt Tab       focus-next
 riverctl map normal Alt Tab       zoom
-riverctl map normal Super Space   spawn "bemenu-run --ch 30 --accept-single -i -c -W 0.33 --hp 10 --fn \"FiraCodeNerdFont 24\" -p \"  run  \""
+riverctl map normal Super Space   spawn fuzzel
 riverctl map normal Super+Shift E exit
 
 # Tiling (riversnap — commands sent to the running layout daemon)
