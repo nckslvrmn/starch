@@ -233,25 +233,54 @@ install -Dm644 "$SCRIPT_DIR/etc/modprobe.d/gcadapter.conf" \
     /etc/modprobe.d/starch-gcadapter.conf
 info "  /etc/modprobe.d/starch-gcadapter.conf"
 
-# NVIDIA kernel module options and early initramfs loading — choose the
-# variant that matches the detected/selected hardware profile.
-if [ "$HW_PROFILE" = "optimus" ]; then
-    MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/nvidia-optimus.conf"
-    MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia-optimus.conf"
-else
-    MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/nvidia.conf"
-    MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf"
-fi
-
-install -Dm644 "$MODPROBE_SRC" /etc/modprobe.d/starch-nvidia.conf
-info "  /etc/modprobe.d/starch-nvidia.conf ($HW_PROFILE)"
+# GPU kernel module options and early initramfs loading — choose the variant
+# that matches the detected/selected hardware profile. Each profile gets its
+# own filename so switching profiles on the same machine never leaves a stale
+# config behind (we also clean up the unused variant below).
+case "$HW_PROFILE" in
+    optimus)
+        MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/nvidia-optimus.conf"
+        MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia-optimus.conf"
+        MODPROBE_DST="/etc/modprobe.d/starch-nvidia.conf"
+        MKINIT_DST="/etc/mkinitcpio.conf.d/starch-nvidia.conf"
+        STALE_MODPROBE="/etc/modprobe.d/starch-amdgpu.conf"
+        STALE_MKINIT="/etc/mkinitcpio.conf.d/starch-amdgpu.conf"
+        ;;
+    nvidia)
+        MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/nvidia.conf"
+        MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/nvidia.conf"
+        MODPROBE_DST="/etc/modprobe.d/starch-nvidia.conf"
+        MKINIT_DST="/etc/mkinitcpio.conf.d/starch-nvidia.conf"
+        STALE_MODPROBE="/etc/modprobe.d/starch-amdgpu.conf"
+        STALE_MKINIT="/etc/mkinitcpio.conf.d/starch-amdgpu.conf"
+        ;;
+    amd)
+        MODPROBE_SRC="$SCRIPT_DIR/etc/modprobe.d/amdgpu.conf"
+        MKINIT_SRC="$SCRIPT_DIR/etc/mkinitcpio.conf.d/amdgpu.conf"
+        MODPROBE_DST="/etc/modprobe.d/starch-amdgpu.conf"
+        MKINIT_DST="/etc/mkinitcpio.conf.d/starch-amdgpu.conf"
+        STALE_MODPROBE="/etc/modprobe.d/starch-nvidia.conf"
+        STALE_MKINIT="/etc/mkinitcpio.conf.d/starch-nvidia.conf"
+        ;;
+esac
 
 STARCH_FORCE_INITRAMFS=0
-if ! cmp -s "$MKINIT_SRC" /etc/mkinitcpio.conf.d/starch-nvidia.conf 2>/dev/null; then
+for stale in "$STALE_MODPROBE" "$STALE_MKINIT"; do
+    if [ -e "$stale" ]; then
+        rm -f "$stale"
+        info "  Removed stale $stale (profile switched)"
+        STARCH_FORCE_INITRAMFS=1
+    fi
+done
+
+install -Dm644 "$MODPROBE_SRC" "$MODPROBE_DST"
+info "  $MODPROBE_DST ($HW_PROFILE)"
+
+if ! cmp -s "$MKINIT_SRC" "$MKINIT_DST" 2>/dev/null; then
     STARCH_FORCE_INITRAMFS=1
 fi
-install -Dm644 "$MKINIT_SRC" /etc/mkinitcpio.conf.d/starch-nvidia.conf
-info "  /etc/mkinitcpio.conf.d/starch-nvidia.conf ($HW_PROFILE)"
+install -Dm644 "$MKINIT_SRC" "$MKINIT_DST"
+info "  $MKINIT_DST ($HW_PROFILE)"
 
 # Record the selected profile so the session launcher scripts know how to
 # configure gamescope / wlroots at runtime.
