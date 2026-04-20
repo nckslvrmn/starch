@@ -349,6 +349,17 @@ starch_apply_gpu_env() {
             # Steam, Plex), not on the compositor.  Use starch_prime_env or
             # starch_flatpak_env_args to pass them to child processes.
             export WLR_DRM_DEVICES="$STARCH_INTEL_CARD"
+
+            # Default ALL apps to Intel's Mesa stack.  Without these, every
+            # Wayland app (browsers, Electron, etc.) iterates through NVIDIA's
+            # EGL/Vulkan ICDs on startup — waking the dGPU from D3cold,
+            # adding ~1 s latency, and often crashing in
+            # libnvidia-egl-wayland.so.  Setting Mesa-first defaults avoids
+            # all of that.  Apps that need the NVIDIA dGPU get explicit PRIME
+            # offload vars via starch_prime_env.
+            export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+            export __GLX_VENDOR_LIBRARY_NAME=mesa
+
             # VA-API video decode still goes through NVIDIA.
             export LIBVA_DRIVER_NAME=nvidia
             export NVD_BACKEND=direct

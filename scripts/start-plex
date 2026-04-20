@@ -30,6 +30,12 @@ GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync)
 [ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
+if [ "$STARCH_PROFILE" = "optimus" ]; then
+    # Force Intel for KMS + Vulkan compositing (see start-steam comments).
+    GAMESCOPE_ARGS+=(--force-drm-device "$STARCH_INTEL_CARD")
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+fi
+
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
 exec gamescope "${GAMESCOPE_ARGS[@]}" -- \
     flatpak run --device=dri "${FP_ENV[@]}" tv.plex.PlexHTPC

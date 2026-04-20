@@ -33,6 +33,21 @@ GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync)
 [ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
+if [ "$STARCH_PROFILE" = "optimus" ]; then
+    # Gamescope must use Intel for BOTH KMS and Vulkan compositing on optimus.
+    # Without these, gamescope renders buffers with NVIDIA Vulkan modifiers and
+    # tries to scanout on Intel KMS → drmModeAddFB2WithModifiers: invalid argument.
+    #
+    #   --force-drm-device  → open the Intel DRM node for KMS scanout
+    #   --prefer-vk-device  → use Intel ANV Vulkan for compositor rendering
+    #
+    # Games running inside gamescope's nested Wayland can still use NVIDIA
+    # Vulkan via the PRIME offload env passed to the steam child process.
+    GAMESCOPE_ARGS+=(--force-drm-device "$STARCH_INTEL_CARD")
+    # 8086 = Intel PCI vendor ID (substring match)
+    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
+fi
+
 # On optimus the compositor (gamescope) runs on the Intel iGPU for KMS;
 # Steam and its games need PRIME offload env to render on the NVIDIA dGPU.
 mapfile -t PRIME_ENV < <(starch_prime_env env)
