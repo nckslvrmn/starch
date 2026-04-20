@@ -4,60 +4,15 @@
 # Log:    ~/.local/share/steam-session.log
 set -uo pipefail
 
-LOGFILE="$HOME/.local/share/steam-session.log"
-mkdir -p "$(dirname "$LOGFILE")"
-exec > >(tee -a "$LOGFILE") 2>&1
-
-echo "[steam-session] START $(date '+%Y-%m-%d %H:%M:%S')"
-
-# ---------------------------------------------------------------------------
-# Hardware profile + display preference
-# ---------------------------------------------------------------------------
-
 # shellcheck source=./starch-profile.sh
 . /usr/local/lib/starch/profile.sh
+
 starch_profile_init
-
-echo "[steam-session] profile:        $STARCH_PROFILE"
-echo "[steam-session] display device: $STARCH_DISPLAY_CARD"
-echo "[steam-session] render device:  $STARCH_RENDER_CARD"
-echo "[steam-session] primary pref:   $STARCH_PRIMARY_PREF"
-echo "[steam-session] primary output: ${STARCH_PRIMARY_OUTPUT:-<any>}"
-
-# ---------------------------------------------------------------------------
-# Refresh rate — highest mode reported by the primary output. Modetest against
-# nvidia-drm works on the discrete profile; on optimus the display pipe is
-# i915 so modetest needs a different module. We skip it if unavailable and
-# let gamescope pick a default.
-# ---------------------------------------------------------------------------
-
-REFRESH=0
-if command -v modetest &>/dev/null; then
-    if [ "$STARCH_PROFILE" = "optimus" ]; then
-        MODETEST_MOD="i915"
-    else
-        MODETEST_MOD="nvidia-drm"
-    fi
-    REFRESH=$(modetest -M "$MODETEST_MOD" 2>/dev/null | awk -v out="${STARCH_PRIMARY_OUTPUT:-}" '
-        $3 == "connected" {
-            in_conn = (out == "" || $2 == out) ? 1 : 0
-            next
-        }
-        in_conn && /^[0-9]/                            { in_conn = 0 }
-        in_conn && /^[[:space:]]+#/ && $3+0 > max     { max = $3+0 }
-        END { if (max) printf "%d\n", max }
-    ')
-    REFRESH="${REFRESH:-0}"
-fi
-
-echo "[steam-session] Refresh: ${REFRESH}Hz"
-
-# ---------------------------------------------------------------------------
-# Environment
-# ---------------------------------------------------------------------------
-
+starch_session_begin steam
+starch_check_gpu_modules steam-session
 starch_apply_gpu_env
 
+# Proton / Steam runtime tuning
 export PROTON_ENABLE_NVAPI=1
 export DXVK_ASYNC=1
 export STEAM_RUNTIME_HEAVY=1
@@ -67,20 +22,16 @@ export STEAM_GAMESCOPE_SESSION=1
 # Wait for WirePlumber to bind a real default sink (see starch-profile.sh).
 starch_wait_for_audio steam-session
 
-# ---------------------------------------------------------------------------
 # Launch — when gamescope exits, the session ends and SDDM takes over.
 #
-# --prefer-output pins scanout to the connector the user chose. On optimus
-# HDR is not supported end-to-end through the Intel display pipe, so we drop
-# --hdr-enabled on that profile.
-# ---------------------------------------------------------------------------
+# --prefer-output pins scanout to the connector the user chose. Gamescope
+# auto-detects the connector's highest refresh mode, so no manual modetest
+# probe is needed. HDR scanout is only viable end-to-end on the nvidia
+# profile; Intel (optimus) and Mesa HDR pipelines don't round-trip cleanly.
 
 GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync)
-[ "$STARCH_PROFILE" = "discrete" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
-[ "$REFRESH" != "0" ] && GAMESCOPE_ARGS+=(-r "$REFRESH")
+[ "$STARCH_PROFILE" = "nvidia" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
-gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui
-
-echo "[steam-session] END $(date '+%Y-%m-%d %H:%M:%S')"
+exec gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui
