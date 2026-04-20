@@ -148,8 +148,9 @@ PACKAGES=(
 
     # River 0.4 window manager (river-pwm) — Python dependencies
     python
+    python-pip
     python-pypubsub
-    python-pycairo
+    python-cairo
 
     # Network manager — required by Steam for network status via D-Bus
     networkmanager

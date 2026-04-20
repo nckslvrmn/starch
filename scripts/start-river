@@ -18,8 +18,38 @@ export SDL_VIDEODRIVER=wayland
 
 # HiDPI / Wayland-native app support
 export XCURSOR_SIZE=32
+export GDK_DPI_SCALE=1
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
 export ELECTRON_OZONE_PLATFORM_HINT=auto
+
+# Silence the "gtk-xft-dpi has invalid value -1" Xwayland/XSettings warning.
+# Without a full DE, xsettingsd isn't running so Xwayland reads -1 from
+# uninitialised XSettings.  Setting Xft.dpi via Xresources fixes this.
+export XENVIRONMENT="${XENVIRONMENT:-}"
+if [ ! -f "$HOME/.Xresources" ] || ! grep -q 'Xft\.dpi' "$HOME/.Xresources" 2>/dev/null; then
+    mkdir -p "$HOME"
+    echo 'Xft.dpi: 96' >> "$HOME/.Xresources"
+fi
+
+# Log GPU env for debugging — this is the first thing to check when the
+# compositor fails to start on a new machine.
+echo "[river-session] WLR_DRM_DEVICES=${WLR_DRM_DEVICES:-<unset>}"
+echo "[river-session] __EGL_VENDOR_LIBRARY_FILENAMES=${__EGL_VENDOR_LIBRARY_FILENAMES:-<unset>}"
+echo "[river-session] __GLX_VENDOR_LIBRARY_NAME=${__GLX_VENDOR_LIBRARY_NAME:-<unset>}"
+echo "[river-session] GBM_BACKEND=${GBM_BACKEND:-<unset>}"
+echo "[river-session] VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-<unset>}"
+
+# Verify the DRM device actually exists before launching.
+if [ -n "${WLR_DRM_DEVICES:-}" ]; then
+    IFS=: read -ra _drm_devs <<< "$WLR_DRM_DEVICES"
+    for _d in "${_drm_devs[@]}"; do
+        if [ ! -e "$_d" ]; then
+            echo "[river-session] ERROR: WLR_DRM_DEVICES references $_d but it does not exist!"
+            echo "[river-session] Available cards:"
+            ls -la /dev/dri/card* 2>/dev/null || echo "  (none)"
+        fi
+    done
+fi
 
 # Wait for WirePlumber to bind a real default sink so the media-key bindings
 # configured in config/river/init have something to target.
