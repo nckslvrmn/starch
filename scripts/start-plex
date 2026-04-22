@@ -9,11 +9,15 @@ starch_check_gpu_modules plex-session
 starch_wait_for_drm plex-session
 starch_apply_gpu_env
 
-starch_wait_for_audio plex-session
+starch_ensure_audio plex-session
 
 mapfile -t FP_ENV < <(starch_flatpak_env_args)
 
 GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync --hdr-enabled)
+
+REFRESH=$(starch_probe_refresh)
+[ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[plex-session] refresh: ${REFRESH}Hz"
+
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then

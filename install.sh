@@ -70,37 +70,44 @@ fi
 step "Installing packages"
 
 PACKAGES=(
+    alsa-firmware
+    alsa-utils
+    bluez
+    bluez-utils
+    brightnessctl
+    dolphin-emu
+    flatpak
+    fuzzel
+    gamemode
     gamescope
+    jack2
+    jq
+    lib32-gamemode
+    lib32-mangohud
+    lib32-mesa
+    lib32-pipewire
+    lib32-vulkan-icd-loader
+    libnewt
+    libpulse
+    mangohud
+    networkmanager
+    pipewire
+    pipewire-alsa
+    pipewire-pulse
+    qt6-svg
+    qt6-wayland
+    sddm
+    sof-firmware
     steam
     vulkan-icd-loader
-    lib32-vulkan-icd-loader
-    lib32-mesa
-    xorg-xwayland
-    gamemode
-    lib32-gamemode
-    mangohud
-    lib32-mangohud
-    pipewire
-    pipewire-pulse
-    pipewire-alsa
-    lib32-pipewire
-    wireplumber
-    wlr-randr
-    jq
-    fuzzel
-    brightnessctl
-    networkmanager
-    xdg-desktop-portal-wlr
-    xdg-desktop-portal-gtk
-    wl-clipboard
-    sddm
     weston
-    qt6-wayland
-    qt6-svg
-    flatpak
+    wireplumber
+    wl-clipboard
+    wlr-randr
+    xdg-desktop-portal-gtk
+    xdg-desktop-portal-wlr
+    xorg-xwayland
     xpadneo-dkms
-    dolphin-emu
-    libnewt
 )
 
 case "$HW_PROFILE" in
@@ -417,6 +424,11 @@ if ! systemctl is-enabled NetworkManager.service &>/dev/null; then
     info "  NetworkManager.service enabled"
 else
     info "  NetworkManager.service already enabled"
+fi
+
+if systemctl list-unit-files --quiet bluetooth.service 2>/dev/null | grep -q bluetooth; then
+    systemctl enable bluetooth.service
+    info "  bluetooth.service enabled"
 fi
 
 if [ "$HW_PROFILE" != "amd" ]; then

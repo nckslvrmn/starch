@@ -16,9 +16,12 @@ export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
 export STEAM_GAMESCOPE_SESSION=1
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 
-starch_wait_for_audio steam-session
+starch_ensure_audio steam-session
 
 GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled)
+
+REFRESH=$(starch_probe_refresh)
+[ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"
 
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
 

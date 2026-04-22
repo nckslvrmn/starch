@@ -193,42 +193,51 @@ _starch_session_end() {
     fi
 }
 
-starch_wait_for_audio() {
+starch_ensure_audio() {
     local tag="${1:-starch}"
-    local timeout_ds="${2:-150}"
-    local stable_ds="${3:-5}"
+    local timeout_ds="${2:-100}"
 
     systemctl --user start pipewire.service pipewire-pulse.service \
         wireplumber.service 2>/dev/null || true
 
-    local i cur last="" stable=0 t0 now dt
-    t0=$(date +%s%3N 2>/dev/null || echo 0)
-
+    local i sinks=0
     for i in $(seq 1 "$timeout_ds"); do
-        cur=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null \
-            | awk -F '"' '/^[[:space:]]*\*?[[:space:]]*node\.name[[:space:]]*=/ {print $2; exit}')
-
-        case "$cur" in
-            auto_null*|dummy*|"") cur="" ;;
-        esac
-
-        if [ -n "$cur" ] && [ "$cur" = "$last" ]; then
-            stable=$((stable + 1))
-            if [ "$stable" -ge "$stable_ds" ]; then
-                now=$(date +%s%3N 2>/dev/null || echo 0)
-                dt=$(( now - t0 ))
-                echo "[$tag] Audio sink ready: $cur (stable after ~${dt}ms)"
-                return 0
-            fi
-        else
-            stable=0
-            last="$cur"
+        sinks=$(pactl list short sinks 2>/dev/null | wc -l)
+        if [ "$sinks" -gt 0 ]; then
+            echo "[$tag] Audio: $sinks sink(s) visible (after ~$((i * 100))ms)"
+            return 0
         fi
         sleep 0.1
     done
 
-    echo "[$tag] WARNING: audio sink did not stabilise after $((timeout_ds / 10))s (last: ${last:-none}) — launching anyway"
+    echo "[$tag] WARNING: no audio sinks visible after $((timeout_ds / 10))s — continuing"
     return 1
+}
+
+starch_probe_refresh() {
+    command -v modetest >/dev/null 2>&1 || return 0
+
+    local driver
+    case "$STARCH_PROFILE" in
+        nvidia)  driver="nvidia-drm" ;;
+        optimus) driver="i915" ;;
+        amd)     driver="amdgpu" ;;
+        *)       return 0 ;;
+    esac
+
+    local want="${STARCH_PRIMARY_OUTPUT:-}"
+    modetest -M "$driver" 2>/dev/null | awk -v want="$want" '
+        $3 == "connected" {
+            match_conn = (want == "" || $4 == want || index($4, want) == 1)
+            in_conn = 1
+            next
+        }
+        $3 == "disconnected" { in_conn = 0; next }
+        in_conn && match_conn && /^[[:space:]]+#[0-9]+/ {
+            if ($3+0 > max) max = $3+0
+        }
+        END { if (max) printf "%d\n", max }
+    '
 }
 
 starch_apply_gpu_env() {

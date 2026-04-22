@@ -41,6 +41,6 @@ if [ -n "${WLR_DRM_DEVICES:-}" ]; then
     done
 fi
 
-starch_wait_for_audio river-session
+starch_ensure_audio river-session
 
 exec river
