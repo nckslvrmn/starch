@@ -23,7 +23,7 @@ GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled)
 REFRESH=$(starch_probe_refresh)
 [ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"
 
-[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && export OUTPUT_CONNECTOR="$STARCH_PRIMARY_OUTPUT"
+[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
     GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
