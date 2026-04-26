@@ -68,6 +68,10 @@ _configure_displays() {
     ')
 }
 
+systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY
+dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY
+systemctl --user restart xdg-desktop-portal
+
 _configure_displays
 
 riverctl map normal Alt Shift Tab focus-prev

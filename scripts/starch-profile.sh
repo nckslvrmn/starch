@@ -193,24 +193,63 @@ _starch_session_end() {
     fi
 }
 
+## Wait for the default audio sink to *stabilise* — not just exist.
+##
+## "Any sink visible" is not enough. SDDM unlocks the session before
+## WirePlumber's policy pass has finished, so the very first default sink
+## can be either:
+##
+##   1. WirePlumber's `auto_null` fallback, published while real hardware
+##      is still being probed. Streams opened against it go to /dev/null
+##      once the real sink takes over.
+##   2. HDA, then replaced by HDMI/Bluetooth a few hundred ms later.
+##
+## Either way Steam's gamepadui latches its audio stream onto the first
+## default and never migrates — the Steam boot video has sound, nothing
+## after that does. We poll `wpctl inspect @DEFAULT_AUDIO_SINK@` for the
+## default sink's `node.name`, reject `auto_null`/`dummy` prefixes, and
+## require the same value across ~500 ms of consecutive samples before
+## returning.
+##
+## Tunables (positional): tag, overall_timeout_ds, stable_ds
+##   tag                — log prefix, e.g. "steam-session"
+##   overall_timeout_ds — max wait in deciseconds (default 150 = 15s)
+##   stable_ds          — consecutive matches required (default 5 ≈ 500ms)
 starch_ensure_audio() {
     local tag="${1:-starch}"
-    local timeout_ds="${2:-100}"
+    local timeout_ds="${2:-150}"
+    local stable_ds="${3:-5}"
 
     systemctl --user start pipewire.service pipewire-pulse.service \
         wireplumber.service 2>/dev/null || true
 
-    local i sinks=0
+    local i cur last="" stable=0 t0 now dt
+    t0=$(date +%s%3N 2>/dev/null || echo 0)
+
     for i in $(seq 1 "$timeout_ds"); do
-        sinks=$(pactl list short sinks 2>/dev/null | wc -l)
-        if [ "$sinks" -gt 0 ]; then
-            echo "[$tag] Audio: $sinks sink(s) visible (after ~$((i * 100))ms)"
-            return 0
+        cur=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null \
+            | awk -F '"' '/^[[:space:]]*\*?[[:space:]]*node\.name[[:space:]]*=/ {print $2; exit}')
+
+        case "$cur" in
+            auto_null*|dummy*|"") cur="" ;;
+        esac
+
+        if [ -n "$cur" ] && [ "$cur" = "$last" ]; then
+            stable=$((stable + 1))
+            if [ "$stable" -ge "$stable_ds" ]; then
+                now=$(date +%s%3N 2>/dev/null || echo 0)
+                dt=$(( now - t0 ))
+                echo "[$tag] Audio sink ready: $cur (stable after ~${dt}ms)"
+                return 0
+            fi
+        else
+            stable=0
+            last="$cur"
         fi
         sleep 0.1
     done
 
-    echo "[$tag] WARNING: no audio sinks visible after $((timeout_ds / 10))s — continuing"
+    echo "[$tag] WARNING: default audio sink did not stabilise after $((timeout_ds / 10))s — continuing"
     return 1
 }
 
