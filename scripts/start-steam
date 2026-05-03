@@ -33,7 +33,9 @@ mapfile -t PRIME_ENV < <(starch_prime_env env)
 
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
 if [ ${#PRIME_ENV[@]} -gt 0 ]; then
-    exec dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- env "${PRIME_ENV[@]}" steam -gamepadui -steamos3
+    starch_run_compositor steam-session -- \
+        dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- env "${PRIME_ENV[@]}" steam -gamepadui -steamos3
 else
-    exec dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui -steamos3
+    starch_run_compositor steam-session -- \
+        dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- steam -gamepadui -steamos3
 fi

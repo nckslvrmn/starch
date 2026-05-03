@@ -364,6 +364,55 @@ starch_prime_env() {
     done
 }
 
+## Run gamescope (or any compositor command) with retry-on-fast-crash.
+##
+## Gamescope 3.16 has an intermittent assertion in
+## wlr_seat_keyboard_notify_enter that fires during Xwayland surface init.
+## It's a race: the next launch usually works. Anything that exits with a
+## non-zero status faster than $threshold_s is treated as that race and
+## retried. A long run (user actually used the session) never retries —
+## a clean exit just exits.
+##
+## Usage: starch_run_compositor <tag> -- <cmd> [args...]
+starch_run_compositor() {
+    local tag="$1"; shift
+    [ "${1:-}" = "--" ] && shift
+
+    local max_attempts=3
+    local threshold_s=15
+    local backoff_s=2
+    local attempt=1
+    local rc t0 t1 elapsed
+
+    while :; do
+        echo "[$tag] launching compositor (attempt $attempt/$max_attempts)"
+        t0=$(date +%s)
+        "$@"
+        rc=$?
+        t1=$(date +%s)
+        elapsed=$(( t1 - t0 ))
+
+        if [ "$rc" -eq 0 ]; then
+            echo "[$tag] compositor exited cleanly after ${elapsed}s"
+            return 0
+        fi
+
+        if [ "$elapsed" -ge "$threshold_s" ]; then
+            echo "[$tag] compositor exited rc=$rc after ${elapsed}s — treating as user-driven exit, not retrying"
+            return "$rc"
+        fi
+
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "[$tag] compositor crashed ${attempt}× in under ${threshold_s}s each — giving up" >&2
+            return "$rc"
+        fi
+
+        echo "[$tag] compositor crashed rc=$rc after ${elapsed}s — retrying in ${backoff_s}s" >&2
+        sleep "$backoff_s"
+        attempt=$((attempt + 1))
+    done
+}
+
 ## Warn if the loaded NVIDIA driver doesn't match the flatpak GL extension
 ## that nvidia-flatpak-gl-sync last installed. Misalignment causes Plex to
 ## fall back to software rendering.

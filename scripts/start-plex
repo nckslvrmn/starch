@@ -39,5 +39,6 @@ _plex_cleanup() {
 }
 trap _plex_cleanup EXIT INT TERM
 
-gamescope "${GAMESCOPE_ARGS[@]}" -- \
+starch_run_compositor plex-session -- \
+    gamescope "${GAMESCOPE_ARGS[@]}" -- \
     flatpak run --device=dri "${FP_ENV[@]}" tv.plex.PlexHTPC
