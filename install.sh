@@ -234,6 +234,13 @@ sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.co
     | install -Dm644 /dev/stdin /etc/sddm.conf.d/10-wayland.conf
 info "  /etc/sddm.conf.d/10-wayland.conf (DefaultUser=$GAMING_USER)"
 
+if [ ! -e /etc/sddm/weston.ini ]; then
+    install -Dm644 "$SCRIPT_DIR/etc/sddm/weston.ini" /etc/sddm/weston.ini
+    info "  /etc/sddm/weston.ini (default — managed by starch-select-display)"
+else
+    info "  /etc/sddm/weston.ini already present — leaving in place"
+fi
+
 find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
     dst="/usr/share/sddm/themes/starch/${src#$SCRIPT_DIR/etc/sddm/themes/starch/}"
     install -Dm644 "$src" "$dst"

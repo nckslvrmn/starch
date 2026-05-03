@@ -3,6 +3,59 @@ set -euo pipefail
 
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starch"
 CONF_FILE="$CONF_DIR/display.conf"
+SDDM_WESTON_INI="/etc/sddm/weston.ini"
+
+INTERNAL_RE='^(eDP|LVDS|DSI)(-|$)'
+
+list_connected_outputs() {
+    local f name
+    for f in /sys/class/drm/card*-*/status; do
+        [ -r "$f" ] || continue
+        [ "$(cat "$f")" = "connected" ] || continue
+        name="${f%/status}"
+        name="${name##*/}"
+        name="${name#card*-}"
+        echo "$name"
+    done
+}
+
+render_weston_ini() {
+    local choice="$1" name disable
+    cat <<'EOF'
+# Managed by starch-select-display. Do not edit by hand.
+# Used by the SDDM Wayland greeter (weston --shell=kiosk).
+EOF
+    echo "# Mode: $choice"
+    echo
+    while read -r name; do
+        [ -n "$name" ] || continue
+        disable=0
+        case "$choice" in
+            internal) [[ "$name" =~ $INTERNAL_RE ]] || disable=1 ;;
+            external) [[ "$name" =~ $INTERNAL_RE ]] && disable=1 ;;
+            auto) ;;
+        esac
+        [ "$disable" = "1" ] || continue
+        printf '[output]\nname=%s\nmode=off\n\n' "$name"
+    done < <(list_connected_outputs)
+}
+
+apply_sddm() {
+    local choice="$1" tmp
+    tmp="$(mktemp)"
+    render_weston_ini "$choice" > "$tmp"
+    if [ "$(id -u)" -eq 0 ]; then
+        install -Dm644 "$tmp" "$SDDM_WESTON_INI"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo install -Dm644 "$tmp" "$SDDM_WESTON_INI"
+    else
+        echo "starch: cannot write $SDDM_WESTON_INI without root; skipping SDDM update" >&2
+        rm -f "$tmp"
+        return 0
+    fi
+    rm -f "$tmp"
+    echo "starch: SDDM greeter outputs updated ($SDDM_WESTON_INI)"
+}
 
 usage() {
     cat <<'EOF'
@@ -38,6 +91,7 @@ save() {
 PRIMARY=$choice
 EOF
     echo "starch: primary display preference set to '$choice'"
+    apply_sddm "$choice"
 }
 
 if [ $# -gt 0 ]; then
