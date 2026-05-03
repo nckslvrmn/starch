@@ -1,0 +1,52 @@
+#!/bin/bash
+# Failsafe recovery session: a plain Weston desktop with a terminal.
+# This deliberately does NOT source starch-profile.sh — if something there
+# is broken, this session still has to come up so the user can fix it.
+#
+# Selectable from SDDM as "Failsafe (Weston)".
+set -u
+
+LOG="$HOME/.local/share/failsafe-session.log"
+mkdir -p "$(dirname "$LOG")"
+exec > >(tee "$LOG") 2>&1
+
+echo "[failsafe-session] START $(date '+%Y-%m-%d %H:%M:%S')"
+echo "[failsafe-session] kernel: $(uname -r)"
+echo "[failsafe-session] /proc/cmdline: $(cat /proc/cmdline 2>/dev/null)"
+echo "[failsafe-session] DRM cards:"
+ls -la /dev/dri/ 2>&1 | sed 's/^/[failsafe-session]   /'
+
+# Ask weston to launch a terminal automatically so the user is never stuck
+# at a blank desktop with no input device working.
+TERM_BIN=""
+for cand in foot alacritty kitty wezterm weston-terminal xterm; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        TERM_BIN="$cand"
+        break
+    fi
+done
+
+WESTON_ARGS=()
+if [ -n "$TERM_BIN" ]; then
+    WESTON_ARGS+=(--shell=desktop-shell.so)
+    WESTON_ARGS+=(-S "starch-failsafe-$$")
+    echo "[failsafe-session] terminal: $TERM_BIN"
+else
+    echo "[failsafe-session] WARNING: no terminal found — install foot or weston-terminal"
+fi
+
+if ! command -v weston >/dev/null 2>&1; then
+    echo "[failsafe-session] FATAL: weston not installed" >&2
+    sleep 5
+    exit 1
+fi
+
+if [ -n "$TERM_BIN" ]; then
+    weston "${WESTON_ARGS[@]}" --xwayland 2>&1 &
+    WESTON_PID=$!
+    sleep 1
+    WAYLAND_DISPLAY="starch-failsafe-$$" "$TERM_BIN" 2>/dev/null &
+    wait "$WESTON_PID"
+else
+    exec weston --xwayland
+fi

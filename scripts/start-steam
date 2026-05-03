@@ -3,10 +3,10 @@ set -uo pipefail
 
 . /usr/local/lib/starch/profile.sh
 
-starch_profile_init
+starch_profile_init || exit 1
 starch_session_begin steam
-starch_check_gpu_modules steam-session
-starch_wait_for_drm steam-session
+starch_check_gpu_modules steam-session || exit 1
+starch_wait_for_drm steam-session || exit 1
 starch_apply_gpu_env
 
 export PROTON_ENABLE_NVAPI=1

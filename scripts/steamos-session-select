@@ -33,12 +33,18 @@ _wait_gone() {
 # session (steam → gamescope → dbus-run-session → start-steam) back to SDDM.
 # Just SIGTERMing gamescope first hangs because gamescope waits on Steam.
 steam -shutdown >/dev/null 2>&1 || true
-_wait_gone gamescope 80 && exit 0
+_wait_gone gamescope 200 && exit 0
 
 # Steam ignored the shutdown request — tear gamescope down directly.
 pkill -TERM -x gamescope 2>/dev/null || true
-_wait_gone gamescope 50 && exit 0
+_wait_gone gamescope 100 && exit 0
 
-# Last resort.
+# Last resort. After SIGKILL, ask SDDM to restart so the next greeter
+# starts from a known-clean state (gamescope-killed-mid-DRM-handoff
+# can otherwise leave the GPU stuck and the greeter black).
 pkill -KILL -x gamescope 2>/dev/null || true
 pkill -KILL -x steam 2>/dev/null || true
+sleep 1
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart sddm.service 2>/dev/null || true
+fi

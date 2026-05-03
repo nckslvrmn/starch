@@ -3,11 +3,12 @@ set -uo pipefail
 
 . /usr/local/lib/starch/profile.sh
 
-starch_profile_init
+starch_profile_init || exit 1
 starch_session_begin plex
-starch_check_gpu_modules plex-session
-starch_wait_for_drm plex-session
+starch_check_gpu_modules plex-session || exit 1
+starch_wait_for_drm plex-session || exit 1
 starch_apply_gpu_env
+starch_check_nvidia_flatpak_gl plex-session || true
 
 starch_ensure_audio plex-session
 
@@ -25,5 +26,18 @@ if [ "$STARCH_PROFILE" = "optimus" ]; then
 fi
 
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
-exec gamescope "${GAMESCOPE_ARGS[@]}" -- \
+
+# Guarantee gamescope exits when this script exits — even if the Plex
+# flatpak is hung and gamescope can't notice. Without this, a wedged Plex
+# can hold DRM master and lock the user out of SDDM.
+_plex_cleanup() {
+    pkill -TERM -x gamescope 2>/dev/null || true
+    pkill -TERM -f 'tv.plex.PlexHTPC' 2>/dev/null || true
+    sleep 2
+    pkill -KILL -x gamescope 2>/dev/null || true
+    pkill -KILL -f 'tv.plex.PlexHTPC' 2>/dev/null || true
+}
+trap _plex_cleanup EXIT INT TERM
+
+gamescope "${GAMESCOPE_ARGS[@]}" -- \
     flatpak run --device=dri "${FP_ENV[@]}" tv.plex.PlexHTPC

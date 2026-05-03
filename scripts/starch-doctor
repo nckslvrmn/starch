@@ -1,0 +1,170 @@
+#!/bin/bash
+# starch-doctor — preflight all the things that can break a session.
+# Run anytime; safe to run from a TTY, the failsafe session, or SSH.
+set -u
+
+PASS=0
+FAIL=0
+WARN=0
+
+green()  { printf '\e[32m%s\e[0m' "$*"; }
+red()    { printf '\e[31m%s\e[0m' "$*"; }
+yellow() { printf '\e[33m%s\e[0m' "$*"; }
+
+check() {
+    local name="$1" status="$2" detail="${3:-}"
+    case "$status" in
+        pass) printf '  [%s] %s\n' "$(green ' OK ')"   "$name"; PASS=$((PASS+1)) ;;
+        fail) printf '  [%s] %s\n' "$(red 'FAIL')"     "$name"; FAIL=$((FAIL+1)) ;;
+        warn) printf '  [%s] %s\n' "$(yellow 'WARN')"  "$name"; WARN=$((WARN+1)) ;;
+    esac
+    [ -n "$detail" ] && printf '         %s\n' "$detail"
+}
+
+section() { printf '\n\e[1m=== %s ===\e[0m\n' "$1"; }
+
+# ---------------------------------------------------------------------------
+section "Profile"
+
+if [ -r /etc/starch/profile.conf ]; then
+    check "/etc/starch/profile.conf readable" pass "$(cat /etc/starch/profile.conf | tr '\n' ' ')"
+    # shellcheck disable=SC1091
+    . /etc/starch/profile.conf
+    case "${STARCH_PROFILE:-}" in
+        nvidia|optimus|amd) check "STARCH_PROFILE valid" pass "${STARCH_PROFILE}" ;;
+        *) check "STARCH_PROFILE valid" fail "got '${STARCH_PROFILE:-<unset>}', expected nvidia|optimus|amd" ;;
+    esac
+else
+    check "/etc/starch/profile.conf readable" fail "missing — re-run install.sh"
+    STARCH_PROFILE="nvidia"
+fi
+
+# ---------------------------------------------------------------------------
+section "Kernel & boot"
+
+if grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
+    check "nvidia_drm.modeset=1 in cmdline" pass
+else
+    if [ "${STARCH_PROFILE:-}" = "amd" ]; then
+        check "nvidia_drm.modeset=1 in cmdline" pass "(not required on amd)"
+    else
+        check "nvidia_drm.modeset=1 in cmdline" fail "add to bootloader, or NVIDIA suspend/Wayland will break"
+    fi
+fi
+
+case "${STARCH_PROFILE:-}" in
+    nvidia)
+        for m in nvidia nvidia_modeset nvidia_drm; do
+            if [ -d "/sys/module/$m" ]; then check "module $m loaded" pass
+            else check "module $m loaded" fail "modprobe $m failing — check dmesg | grep nvidia"
+            fi
+        done
+        ;;
+    optimus)
+        for m in nvidia nvidia_modeset nvidia_drm i915; do
+            if [ -d "/sys/module/$m" ]; then check "module $m loaded" pass
+            else check "module $m loaded" fail
+            fi
+        done
+        ;;
+    amd)
+        if [ -d /sys/module/amdgpu ]; then check "module amdgpu loaded" pass
+        else check "module amdgpu loaded" fail
+        fi
+        ;;
+esac
+
+# ---------------------------------------------------------------------------
+section "DRM devices"
+
+if compgen -G '/dev/dri/card*' >/dev/null; then
+    check "/dev/dri/card* present" pass "$(ls /dev/dri/card* 2>/dev/null | tr '\n' ' ')"
+else
+    check "/dev/dri/card* present" fail "no DRM devices — kernel module not loaded or BIOS GPU mode wrong"
+fi
+
+if compgen -G '/sys/class/drm/card*-*/status' >/dev/null; then
+    connected=0
+    for f in /sys/class/drm/card*-*/status; do
+        [ "$(cat "$f" 2>/dev/null)" = "connected" ] && connected=$((connected+1))
+    done
+    if [ "$connected" -gt 0 ]; then
+        check "$connected display(s) connected" pass
+    else
+        check "displays connected" warn "no connected outputs detected (lid closed? cable unplugged?)"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+section "Required binaries"
+
+for bin in gamescope steam weston wpctl modetest udevadm sddm flatpak jq wlr-randr; do
+    if command -v "$bin" >/dev/null 2>&1; then check "$bin"  pass
+    else check "$bin" warn "not in PATH"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+section "Services"
+
+for svc in sddm.service NetworkManager.service; do
+    if systemctl is-enabled "$svc" &>/dev/null; then check "$svc enabled" pass
+    else check "$svc enabled" fail
+    fi
+    if systemctl is-active "$svc" &>/dev/null; then check "$svc active" pass
+    else check "$svc active" warn
+    fi
+done
+
+if [ "${STARCH_PROFILE:-}" != "amd" ]; then
+    for svc in nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service; do
+        if systemctl is-enabled "$svc" &>/dev/null; then check "$svc enabled" pass
+        else check "$svc enabled" warn "suspend/resume may corrupt GPU VRAM"
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
+section "Flatpak / Plex"
+
+if flatpak info --system tv.plex.PlexHTPC &>/dev/null; then
+    check "tv.plex.PlexHTPC installed" pass
+else
+    check "tv.plex.PlexHTPC installed" warn "flatpak install flathub tv.plex.PlexHTPC"
+fi
+
+if [ "${STARCH_PROFILE:-}" != "amd" ]; then
+    stamp=/var/lib/starch/flatpak-gl.version
+    loaded=$(modinfo -F version nvidia 2>/dev/null | head -1)
+    if [ -r "$stamp" ] && [ -n "$loaded" ]; then
+        stamped=$(cat "$stamp")
+        if [ "$stamped" = "$loaded" ]; then
+            check "flatpak GL extension matches driver $loaded" pass
+        else
+            check "flatpak GL extension matches driver" fail "stamp=$stamped loaded=$loaded → run sudo nvidia-flatpak-gl-sync"
+        fi
+    elif [ -n "$loaded" ]; then
+        check "flatpak GL stamp present" warn "no stamp at $stamp — run sudo nvidia-flatpak-gl-sync"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+section "Sessions installed"
+
+for s in steam river plex failsafe; do
+    if [ -e "/usr/share/wayland-sessions/$s.desktop" ]; then check "$s.desktop" pass
+    else check "$s.desktop" warn "missing — re-run install.sh"
+    fi
+done
+
+for s in start-steam start-plex start-river start-failsafe steamos-session-select starch-select-display; do
+    p=$(command -v "$s" 2>/dev/null || true)
+    if [ -n "$p" ] && [ -x "$p" ]; then check "$s executable" pass "$p"
+    else check "$s executable" fail "missing or not executable"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+echo
+printf 'Summary: %s pass, %s warn, %s fail\n' "$(green "$PASS")" "$(yellow "$WARN")" "$(red "$FAIL")"
+[ "$FAIL" -eq 0 ]

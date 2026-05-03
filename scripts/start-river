@@ -3,10 +3,10 @@ set -uo pipefail
 
 . /usr/local/lib/starch/profile.sh
 
-starch_profile_init
+starch_profile_init || exit 1
 starch_session_begin river
-starch_check_gpu_modules river-session
-starch_wait_for_drm river-session
+starch_check_gpu_modules river-session || exit 1
+starch_wait_for_drm river-session || exit 1
 starch_apply_gpu_env
 
 export XDG_CURRENT_DESKTOP=river

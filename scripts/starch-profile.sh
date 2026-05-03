@@ -2,14 +2,22 @@ STARCH_SYSTEM_CONF="/etc/starch/profile.conf"
 STARCH_USER_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/starch/display.conf"
 
 _starch_load_profile() {
-    STARCH_PROFILE="nvidia"
-    if [ -r "$STARCH_SYSTEM_CONF" ]; then
-        . "$STARCH_SYSTEM_CONF"
+    if [ ! -r "$STARCH_SYSTEM_CONF" ]; then
+        echo "[starch] FATAL: $STARCH_SYSTEM_CONF missing or unreadable." >&2
+        echo "[starch] Re-run install.sh to regenerate it." >&2
+        return 1
     fi
+    STARCH_PROFILE=""
+    STARCH_REFRESH_FALLBACK=""
+    . "$STARCH_SYSTEM_CONF"
     case "$STARCH_PROFILE" in
-        discrete)          STARCH_PROFILE="nvidia" ;;
+        discrete)           STARCH_PROFILE="nvidia" ;;
         nvidia|optimus|amd) ;;
-        *)                 STARCH_PROFILE="nvidia" ;;
+        *)
+            echo "[starch] FATAL: invalid STARCH_PROFILE='$STARCH_PROFILE' in $STARCH_SYSTEM_CONF" >&2
+            echo "[starch] Expected one of: nvidia, optimus, amd." >&2
+            return 1
+            ;;
     esac
 }
 
@@ -92,7 +100,7 @@ _starch_resolve_primary_output() {
 }
 
 starch_profile_init() {
-    _starch_load_profile
+    _starch_load_profile || return 1
     _starch_find_cards
 
     case "$STARCH_PROFILE" in
@@ -110,9 +118,17 @@ starch_profile_init() {
             ;;
     esac
 
+    if [ -z "$STARCH_DISPLAY_CARD" ]; then
+        echo "[starch] FATAL: no DRM card found for profile '$STARCH_PROFILE'." >&2
+        echo "[starch] /sys/class/drm contents:" >&2
+        ls -la /sys/class/drm/ 2>&1 | sed 's/^/[starch]   /' >&2
+        echo "[starch] Check that the GPU kernel module is loaded (lsmod | grep -E 'nvidia|amdgpu|i915')." >&2
+        return 1
+    fi
+
     _starch_resolve_primary_output
 
-    export STARCH_PROFILE \
+    export STARCH_PROFILE STARCH_REFRESH_FALLBACK \
            STARCH_NVIDIA_CARD STARCH_INTEL_CARD STARCH_AMD_CARD \
            STARCH_DISPLAY_CARD STARCH_RENDER_CARD \
            STARCH_PRIMARY_PREF STARCH_PRIMARY_OUTPUT
@@ -254,29 +270,42 @@ starch_ensure_audio() {
 }
 
 starch_probe_refresh() {
-    command -v modetest >/dev/null 2>&1 || return 0
+    local fallback="${STARCH_REFRESH_FALLBACK:-}"
+    local result=""
 
-    local driver
-    case "$STARCH_PROFILE" in
-        nvidia)  driver="nvidia-drm" ;;
-        optimus) driver="i915" ;;
-        amd)     driver="amdgpu" ;;
-        *)       return 0 ;;
-    esac
+    if command -v modetest >/dev/null 2>&1; then
+        local driver=""
+        case "$STARCH_PROFILE" in
+            nvidia)  driver="nvidia-drm" ;;
+            optimus) driver="i915" ;;
+            amd)     driver="amdgpu" ;;
+        esac
 
-    local want="${STARCH_PRIMARY_OUTPUT:-}"
-    modetest -M "$driver" 2>/dev/null | awk -v want="$want" '
-        $3 == "connected" {
-            match_conn = (want == "" || $4 == want || index($4, want) == 1)
-            in_conn = 1
-            next
-        }
-        $3 == "disconnected" { in_conn = 0; next }
-        in_conn && match_conn && /^[[:space:]]+#[0-9]+/ {
-            if ($3+0 > max) max = $3+0
-        }
-        END { if (max) printf "%d\n", max }
-    '
+        if [ -n "$driver" ]; then
+            local want="${STARCH_PRIMARY_OUTPUT:-}"
+            result=$(modetest -M "$driver" 2>/dev/null | awk -v want="$want" '
+                $3 == "connected" {
+                    match_conn = (want == "" || $4 == want || index($4, want) == 1)
+                    in_conn = 1
+                    next
+                }
+                $3 == "disconnected" { in_conn = 0; next }
+                in_conn && match_conn && /^[[:space:]]+#[0-9]+/ {
+                    if ($3+0 > max) max = $3+0
+                }
+                END { if (max) printf "%d\n", max }
+            ')
+        fi
+    fi
+
+    if [ -n "$result" ]; then
+        printf '%s\n' "$result"
+    elif [ -n "$fallback" ]; then
+        echo "[starch] modetest probe failed; using STARCH_REFRESH_FALLBACK=${fallback}Hz" >&2
+        printf '%s\n' "$fallback"
+    else
+        echo "[starch] WARNING: could not probe refresh rate and no STARCH_REFRESH_FALLBACK set; gamescope will pick a default" >&2
+    fi
 }
 
 starch_apply_gpu_env() {
@@ -333,6 +362,28 @@ starch_prime_env() {
             flatpak) printf -- '--env=%s\n' "$v" ;;
         esac
     done
+}
+
+## Warn if the loaded NVIDIA driver doesn't match the flatpak GL extension
+## that nvidia-flatpak-gl-sync last installed. Misalignment causes Plex to
+## fall back to software rendering.
+starch_check_nvidia_flatpak_gl() {
+    local tag="${1:-starch}"
+    [ "$STARCH_PROFILE" = "nvidia" ] || [ "$STARCH_PROFILE" = "optimus" ] || return 0
+
+    local stamp="/var/lib/starch/flatpak-gl.version"
+    [ -r "$stamp" ] || return 0
+
+    local stamp_ver loaded_ver
+    stamp_ver=$(cat "$stamp" 2>/dev/null)
+    loaded_ver=$(modinfo -F version nvidia 2>/dev/null | head -1)
+    if [ -n "$stamp_ver" ] && [ -n "$loaded_ver" ] && [ "$stamp_ver" != "$loaded_ver" ]; then
+        echo "[$tag] WARNING: NVIDIA driver $loaded_ver does not match flatpak GL stamp $stamp_ver." >&2
+        echo "[$tag] WARNING: GPU acceleration in flatpak apps (Plex) may be broken." >&2
+        echo "[$tag] Run: sudo /usr/local/bin/nvidia-flatpak-gl-sync" >&2
+        return 1
+    fi
+    return 0
 }
 
 starch_flatpak_env_args() {

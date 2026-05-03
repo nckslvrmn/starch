@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Failsafe (Weston)
+Comment=Recovery session — plain Weston + terminal, no GPU env tricks
+Exec=/usr/local/bin/start-failsafe
+Type=Application

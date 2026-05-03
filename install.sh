@@ -77,6 +77,7 @@ PACKAGES=(
     brightnessctl
     dolphin-emu
     flatpak
+    foot
     fuzzel
     gamemode
     gamescope
@@ -87,6 +88,7 @@ PACKAGES=(
     lib32-mesa
     lib32-pipewire
     lib32-vulkan-icd-loader
+    libdrm
     libnewt
     libpulse
     mangohud
@@ -203,10 +205,23 @@ install -Dm644 "$MKINIT_SRC" "$MKINIT_DST"
 info "  $MKINIT_DST ($HW_PROFILE)"
 
 install -d -m755 /etc/starch
+# Preserve any user-set STARCH_REFRESH_FALLBACK across re-installs.
+EXISTING_REFRESH=""
+if [ -r /etc/starch/profile.conf ]; then
+    # shellcheck disable=SC1091
+    EXISTING_REFRESH=$(. /etc/starch/profile.conf 2>/dev/null; echo "${STARCH_REFRESH_FALLBACK:-}")
+fi
 cat > /etc/starch/profile.conf <<EOF
 STARCH_PROFILE=$HW_PROFILE
+# Optional fallback refresh rate (Hz) used when modetest probing fails.
+# Set this to your panel's native rate (e.g. 165) so a tooling regression
+# never silently drops you to 60Hz.
+STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH}
 EOF
-info "  /etc/starch/profile.conf (STARCH_PROFILE=$HW_PROFILE)"
+info "  /etc/starch/profile.conf (STARCH_PROFILE=$HW_PROFILE, STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH:-<unset>})"
+
+install -d -m755 /var/lib/starch
+info "  /var/lib/starch/"
 
 install -Dm644 "$SCRIPT_DIR/etc/udev/rules.d/70-gaming.conf" \
     /etc/udev/rules.d/70-starch-gaming.rules
@@ -241,6 +256,8 @@ else
     info "  /etc/sddm/weston.ini already present — leaving in place"
 fi
 
+# Wipe stale theme files so removed assets don't linger and confuse the greeter.
+rm -rf /usr/share/sddm/themes/starch
 find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
     dst="/usr/share/sddm/themes/starch/${src#$SCRIPT_DIR/etc/sddm/themes/starch/}"
     install -Dm644 "$src" "$dst"
@@ -268,6 +285,14 @@ info "  /usr/local/bin/start-plex"
 install -Dm755 "$SCRIPT_DIR/scripts/starch-select-display" \
     /usr/local/bin/starch-select-display
 info "  /usr/local/bin/starch-select-display"
+
+install -Dm755 "$SCRIPT_DIR/scripts/start-failsafe" \
+    /usr/local/bin/start-failsafe
+info "  /usr/local/bin/start-failsafe"
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-doctor" \
+    /usr/local/bin/starch-doctor
+info "  /usr/local/bin/starch-doctor"
 
 if [ "$HW_PROFILE" != "amd" ]; then
     install -Dm755 "$SCRIPT_DIR/scripts/nvidia-flatpak-gl-sync" \
@@ -380,6 +405,10 @@ info "  /usr/share/wayland-sessions/river.desktop (overwritten)"
 install -Dm644 "$SCRIPT_DIR/sessions/plex.desktop" \
     /usr/share/wayland-sessions/plex.desktop
 info "  /usr/share/wayland-sessions/plex.desktop"
+
+install -Dm644 "$SCRIPT_DIR/sessions/failsafe.desktop" \
+    /usr/share/wayland-sessions/failsafe.desktop
+info "  /usr/share/wayland-sessions/failsafe.desktop"
 
 step "Installing River configuration for $GAMING_USER"
 
@@ -499,8 +528,16 @@ echo ""
 if [ "$HW_PROFILE" != "amd" ]; then
     echo "  Before rebooting, verify your bootloader kernel cmdline contains:"
     echo "    nvidia_drm.modeset=1"
-    if ! grep -q 'nvidia_drm\.modeset=1' /proc/cmdline 2>/dev/null; then
-        warn "  Current /proc/cmdline is missing nvidia_drm.modeset=1 — add it before rebooting."
+    if ! grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
+        if [ "${STARCH_SKIP_CMDLINE_CHECK:-0}" = "1" ]; then
+            warn "  Current /proc/cmdline is missing nvidia_drm.modeset=1 (skipped via STARCH_SKIP_CMDLINE_CHECK=1)"
+        else
+            error "  Current /proc/cmdline is missing nvidia_drm.modeset=1."
+            error "  Without it, Wayland sessions and NVIDIA suspend will silently break on reboot."
+            error "  Add 'nvidia_drm.modeset=1' to your bootloader kernel parameters and re-run."
+            error "  Override with STARCH_SKIP_CMDLINE_CHECK=1 if you've already updated the bootloader."
+            exit 1
+        fi
     fi
     echo ""
 fi
@@ -524,8 +561,10 @@ echo "    starch-select-display --show     # show current preference"
 echo ""
 echo "  Switch to Desktop from Steam's power menu returns to SDDM."
 echo ""
-echo "  If you need to troubleshoot, check:"
-echo "    - Kernel logs: dmesg | grep -i nvidia"
-echo "    - SDDM logs: journalctl -u sddm -b"
-echo "    - Steam session log: ~/.local/share/steam-session.log"
+echo "  If you need to troubleshoot:"
+echo "    - Run 'starch-doctor' for a preflight check of every common breakage"
+echo "    - Pick 'Failsafe (Weston)' from SDDM if a session won't start"
+echo "    - Kernel logs:  dmesg | grep -i nvidia"
+echo "    - SDDM logs:    journalctl -u sddm -b"
+echo "    - Session logs: ~/.local/share/{steam,plex,river,failsafe}-session.log"
 echo ""
