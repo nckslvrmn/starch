@@ -1,6 +1,5 @@
 #!/bin/bash
-# starch-doctor — preflight all the things that can break a session.
-# Run anytime; safe to run from a TTY or SSH.
+# Preflight all the things that can break a session. Safe to run from a TTY.
 set -u
 
 PASS=0
@@ -23,7 +22,6 @@ check() {
 
 section() { printf '\n\e[1m=== %s ===\e[0m\n' "$1"; }
 
-# ---------------------------------------------------------------------------
 section "Profile"
 
 if [ -r /etc/starch/profile.conf ]; then
@@ -39,7 +37,6 @@ else
     STARCH_PROFILE="nvidia"
 fi
 
-# ---------------------------------------------------------------------------
 section "Kernel & boot"
 
 if grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
@@ -74,7 +71,6 @@ case "${STARCH_PROFILE:-}" in
         ;;
 esac
 
-# ---------------------------------------------------------------------------
 section "DRM devices"
 
 if compgen -G '/dev/dri/card*' >/dev/null; then
@@ -95,7 +91,6 @@ if compgen -G '/sys/class/drm/card*-*/status' >/dev/null; then
     fi
 fi
 
-# ---------------------------------------------------------------------------
 section "Required binaries"
 
 for bin in gamescope steam cage wpctl modetest udevadm sddm flatpak jq wlr-randr; do
@@ -104,7 +99,6 @@ for bin in gamescope steam cage wpctl modetest udevadm sddm flatpak jq wlr-randr
     fi
 done
 
-# ---------------------------------------------------------------------------
 section "Services"
 
 for svc in sddm.service NetworkManager.service; do
@@ -124,7 +118,6 @@ if [ "${STARCH_PROFILE:-}" != "amd" ]; then
     done
 fi
 
-# ---------------------------------------------------------------------------
 section "Flatpak / Plex"
 
 if flatpak info --system tv.plex.PlexHTPC &>/dev/null; then
@@ -148,7 +141,6 @@ if [ "${STARCH_PROFILE:-}" != "amd" ]; then
     fi
 fi
 
-# ---------------------------------------------------------------------------
 section "Sessions installed"
 
 for s in steam river plex; do
@@ -165,6 +157,5 @@ for s in start-steam start-plex start-river starch-steam-launch steamos-session-
 done
 
 # ---------------------------------------------------------------------------
-echo
-printf 'Summary: %s pass, %s warn, %s fail\n' "$(green "$PASS")" "$(yellow "$WARN")" "$(red "$FAIL")"
+printf '\nSummary: %s pass, %s warn, %s fail\n' "$(green "$PASS")" "$(yellow "$WARN")" "$(red "$FAIL")"
 [ "$FAIL" -eq 0 ]

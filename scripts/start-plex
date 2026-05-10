@@ -27,9 +27,8 @@ fi
 
 echo "[plex-session] gamescope ${GAMESCOPE_ARGS[*]}"
 
-# Guarantee gamescope exits when this script exits — even if the Plex
-# flatpak is hung and gamescope can't notice. Without this, a wedged Plex
-# can hold DRM master and lock the user out of SDDM.
+# A wedged Plex flatpak can hold DRM master and lock the user out of SDDM
+# because gamescope won't notice the child is stuck. Force-kill on exit.
 _plex_cleanup() {
     pkill -TERM -x gamescope 2>/dev/null || true
     pkill -TERM -f 'tv.plex.PlexHTPC' 2>/dev/null || true

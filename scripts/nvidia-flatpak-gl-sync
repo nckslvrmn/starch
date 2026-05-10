@@ -16,9 +16,7 @@ GL32_EXT="org.freedesktop.Platform.GL32.nvidia-${EXT_VER}"
 
 echo "nvidia-flatpak-gl-sync: driver ${DRIVER_VER} → installing ${GL_EXT}"
 
-# A real install failure (network down, flatpak daemon hung, missing
-# extension on flathub) must not be silently swallowed — Plex would then
-# fall back to software rendering with no warning.
+# Swallowed install failures would silently demote Plex to software rendering.
 gl_ok=0
 
 if flatpak info --system "$GL_EXT" &>/dev/null; then
@@ -38,7 +36,6 @@ else
     echo "nvidia-flatpak-gl-sync: WARNING ${GL32_EXT} not installed (32-bit GL — non-fatal)" >&2
 fi
 
-# Remove stale extensions matching a different driver version.
 flatpak list --system --columns=application 2>/dev/null \
     | grep -E 'org\.freedesktop\.Platform\.GL(32)?\.nvidia-' \
     | while read -r ext; do
@@ -48,8 +45,7 @@ flatpak list --system --columns=application 2>/dev/null \
         fi
     done
 
-# Stamp only when the 64-bit GL extension is present — start-plex reads
-# this to detect driver/flatpak drift on the next session.
+# start-plex reads this stamp to detect driver/flatpak drift on next session.
 if [ "$gl_ok" = "1" ]; then
     install -d -m755 "$STAMP_DIR"
     printf '%s\n' "$DRIVER_VER" > "$STAMP"

@@ -207,7 +207,6 @@ install -Dm644 "$MKINIT_SRC" "$MKINIT_DST"
 info "  $MKINIT_DST ($HW_PROFILE)"
 
 install -d -m755 /etc/starch
-# Preserve any user-set STARCH_REFRESH_FALLBACK across re-installs.
 EXISTING_REFRESH=""
 if [ -r /etc/starch/profile.conf ]; then
     # shellcheck disable=SC1091
@@ -215,9 +214,8 @@ if [ -r /etc/starch/profile.conf ]; then
 fi
 cat > /etc/starch/profile.conf <<EOF
 STARCH_PROFILE=$HW_PROFILE
-# Optional fallback refresh rate (Hz) used when modetest probing fails.
-# Set this to your panel's native rate (e.g. 165) so a tooling regression
-# never silently drops you to 60Hz.
+# Fallback refresh rate (Hz) used when modetest probing fails. Set to your
+# panel's native rate so a tooling regression doesn't silently drop to 60Hz.
 STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH}
 EOF
 info "  /etc/starch/profile.conf (STARCH_PROFILE=$HW_PROFILE, STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH:-<unset>})"
@@ -251,12 +249,11 @@ sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sddm.conf.d/10-wayland.co
     | install -Dm644 /dev/stdin /etc/sddm.conf.d/10-wayland.conf
 info "  /etc/sddm.conf.d/10-wayland.conf (DefaultUser=$GAMING_USER)"
 
-# Clean up the previous weston-based greeter config if upgrading.
 for stale in /etc/sddm/weston.ini; do
     [ -e "$stale" ] && rm -f "$stale" && info "  Removed stale $stale"
 done
 
-# Wipe stale theme files so removed assets don't linger and confuse the greeter.
+# Wipe theme files before reinstalling so removed assets don't linger.
 rm -rf /usr/share/sddm/themes/starch
 find "$SCRIPT_DIR/etc/sddm/themes/starch" -type f | while read -r src; do
     dst="/usr/share/sddm/themes/starch/${src#"$SCRIPT_DIR"/etc/sddm/themes/starch/}"
@@ -294,7 +291,6 @@ install -Dm644 "$SCRIPT_DIR/etc/starch/os-release.steamos" \
     /etc/starch/os-release.steamos
 info "  /etc/starch/os-release.steamos"
 
-# Failsafe session was removed — clean up any prior install.
 for stale in /usr/local/bin/start-failsafe /usr/share/wayland-sessions/failsafe.desktop; do
     [ -e "$stale" ] && rm -f "$stale" && info "  Removed stale $stale"
 done
@@ -311,11 +307,8 @@ install -Dm755 "$SCRIPT_DIR/scripts/starch-audio-port-watcher" \
     /usr/local/bin/starch-audio-port-watcher
 info "  /usr/local/bin/starch-audio-port-watcher"
 
-# System-wide user oneshot — runs starch-audio-setup once per login so
-# every gaming user gets per-port virtual sinks generated against their
-# current hardware state (HDMI ports come and go with display plug state).
-# starch-audio-setup is idempotent and skips the pipewire restart when
-# the generated config has not changed.
+# Per-login oneshot so HDMI ports that come and go with display plug state
+# are re-discovered. starch-audio-setup is idempotent.
 cat > /etc/systemd/user/starch-audio-setup.service <<'EOF'
 [Unit]
 Description=starch audio virtual-sink setup
@@ -337,10 +330,8 @@ info "  /etc/systemd/user/starch-audio-setup.service"
 systemctl --global enable starch-audio-setup.service >/dev/null 2>&1 || true
 info "  enabled (global) starch-audio-setup.service"
 
-# Realtek HDA codecs frequently ship with 'Line Out' at 0% and
-# 'Auto-Mute Mode' disabled, which silently gates the analog output.
-# Fix every analog card we can see, then persist via alsactl so
-# alsa-restore.service brings it back across reboots.
+# Realtek HDA ships 'Line Out' at 0% and 'Auto-Mute Mode' off, silently
+# gating analog output. Persist via alsactl so alsa-restore brings it back.
 if command -v amixer >/dev/null 2>&1; then
     for card_idx in $(awk '/^ [0-9]+ \[/ {gsub(/[\[\]]/,""); print $1}' /proc/asound/cards 2>/dev/null); do
         amixer -c "$card_idx" scontrols 2>/dev/null | grep -q "'Line Out'" || continue
@@ -510,6 +501,16 @@ for group in input video audio seat gamemode lp; do
 done
 
 step "Enabling services"
+
+install -Dm644 "$SCRIPT_DIR/etc/systemd/system/starch-cpu-performance.service" \
+    /etc/systemd/system/starch-cpu-performance.service
+info "  /etc/systemd/system/starch-cpu-performance.service"
+systemctl daemon-reload
+systemctl enable starch-cpu-performance.service
+info "  starch-cpu-performance.service enabled"
+systemctl start  starch-cpu-performance.service 2>/dev/null \
+    && info "  starch-cpu-performance.service started" \
+    || warn "  starch-cpu-performance.service start failed (non-fatal; will run on next boot)"
 
 systemctl enable sddm.service
 info "  sddm.service enabled"

@@ -1,5 +1,6 @@
 # shellcheck shell=bash
 # Sourced library — no shebang on purpose.
+
 STARCH_SYSTEM_CONF="/etc/starch/profile.conf"
 STARCH_USER_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/starch/display.conf"
 
@@ -213,28 +214,14 @@ _starch_session_end() {
     fi
 }
 
-## Wait for the default audio sink to *stabilise* — not just exist.
-##
-## "Any sink visible" is not enough. SDDM unlocks the session before
-## WirePlumber's policy pass has finished, so the very first default sink
-## can be either:
-##
-##   1. WirePlumber's `auto_null` fallback, published while real hardware
-##      is still being probed. Streams opened against it go to /dev/null
-##      once the real sink takes over.
-##   2. HDA, then replaced by HDMI/Bluetooth a few hundred ms later.
-##
-## Either way Steam's gamepadui latches its audio stream onto the first
-## default and never migrates — the Steam boot video has sound, nothing
-## after that does. We poll `wpctl inspect @DEFAULT_AUDIO_SINK@` for the
-## default sink's `node.name`, reject `auto_null`/`dummy` prefixes, and
-## require the same value across ~500 ms of consecutive samples before
-## returning.
-##
-## Tunables (positional): tag, overall_timeout_ds, stable_ds
-##   tag                — log prefix, e.g. "steam-session"
-##   overall_timeout_ds — max wait in deciseconds (default 150 = 15s)
-##   stable_ds          — consecutive matches required (default 5 ≈ 500ms)
+# Wait for the default audio sink to *stabilise* — not just exist. SDDM
+# unlocks the session before WirePlumber's policy pass has finished, so the
+# first default sink can be WirePlumber's `auto_null` fallback or an HDA
+# stub that gets replaced by HDMI/Bluetooth a moment later. Steam's
+# gamepadui latches its audio stream onto the first default and never
+# migrates — the boot video has sound, nothing after that does. Poll
+# node.name, reject auto_null/dummy, and require it to hold steady before
+# returning.
 starch_ensure_audio() {
     local tag="${1:-starch}"
     local timeout_ds="${2:-150}"
@@ -368,21 +355,10 @@ starch_prime_env() {
     done
 }
 
-## Run gamescope (or any compositor command) with retry-on-crash.
-##
-## Gamescope 3.16 has an intermittent assertion in
-## wlr_seat_keyboard_notify_enter that can fire either during Xwayland init
-## or mid-session. A clean exit (rc=0) is the user logging out and never
-## retries. Any non-zero exit is treated as a crash and retried, so the
-## user lands back in their session instead of at the greeter.
-##
-## Three fast consecutive crashes (each shorter than $fast_threshold_s)
-## means something is fundamentally wrong — give up and let the session
-## script exit so SDDM reappears (or drop the user to a TTY if SDDM is
-## also broken). A crash after a long run resets the fast-crash counter;
-## we'll keep restarting as long as each session lasts a while.
-##
-## Usage: starch_run_compositor <tag> -- <cmd> [args...]
+# Retry the compositor on non-zero exit. Gamescope 3.16 has an intermittent
+# assertion in wlr_seat_keyboard_notify_enter; a clean exit means the user
+# logged out, anything else is treated as a crash. Three fast crashes in a
+# row gives up so the user falls back to SDDM rather than thrashing.
 starch_run_compositor() {
     local tag="$1"; shift
     [ "${1:-}" = "--" ] && shift
@@ -422,9 +398,8 @@ starch_run_compositor() {
     done
 }
 
-## Warn if the loaded NVIDIA driver doesn't match the flatpak GL extension
-## that nvidia-flatpak-gl-sync last installed. Misalignment causes Plex to
-## fall back to software rendering.
+# Misalignment between the loaded NVIDIA driver and the flatpak GL extension
+# causes Plex to silently fall back to software rendering.
 starch_check_nvidia_flatpak_gl() {
     local tag="${1:-starch}"
     [ "$STARCH_PROFILE" = "nvidia" ] || [ "$STARCH_PROFILE" = "optimus" ] || return 0
