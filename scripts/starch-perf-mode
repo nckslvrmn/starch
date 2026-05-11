@@ -54,7 +54,12 @@ on)
         done
     fi
 
-    if [ "$STARCH_PROFILE" = "nvidia" ] || [ "$STARCH_PROFILE" = "optimus" ]; then
+    # Persistence mode (`nvidia-smi -pm 1`) on the optimus profile fights
+    # NVreg_DynamicPowerManagement=0x02: the driver stays attached while
+    # runtime PM tries to D3cold the dGPU, and PRIME-offloaded games render
+    # black scenes with only UI/cursor visible. Only enable on the nvidia
+    # (desktop, no runtime PM) profile.
+    if [ "$STARCH_PROFILE" = "nvidia" ]; then
         if command -v nvidia-smi >/dev/null 2>&1; then
             if nvidia-smi -pm 1 >/dev/null 2>&1; then
                 printf 'NV=1\n' >> "$STATE_FILE"
@@ -96,7 +101,7 @@ off)
         done
     fi
 
-    if [ "$NV" = "1" ] || [ "$STARCH_PROFILE" = "nvidia" ] || [ "$STARCH_PROFILE" = "optimus" ]; then
+    if [ "$NV" = "1" ] || [ "$STARCH_PROFILE" = "nvidia" ]; then
         if command -v nvidia-smi >/dev/null 2>&1; then
             nvidia-smi -pm 0 >/dev/null 2>&1 || true
         fi

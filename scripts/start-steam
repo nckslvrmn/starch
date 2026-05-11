@@ -31,9 +31,6 @@ REFRESH=$(starch_probe_refresh)
 
 [ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
 
-if [ "$STARCH_PROFILE" = "optimus" ]; then
-    GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
-fi
 
 mapfile -t PRIME_ENV < <(starch_prime_env env)
 
