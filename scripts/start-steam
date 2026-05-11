@@ -13,18 +13,18 @@ export PROTON_ENABLE_NVAPI=1
 export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
 export STEAM_GAMESCOPE_SESSION=1
 
-# Auto-activate gamemode for every process in the Steam session — without
-# this, /etc/gamemode.ini (powermizer/perf-level/core-pin/renice) only kicks
-# in for games launched via `gamemoderun %command%`. $LIB is resolved by the
-# dynamic linker to lib/lib32 per-process, so 32-bit Proton children pick up
-# the right .so. Must be single-quoted so the shell doesn't expand $LIB.
-export LD_PRELOAD='/usr/$LIB/libgamemodeauto.so.0'
 XDG_RUNTIME_DIR=/run/user/$(id -u)
 export XDG_RUNTIME_DIR
 
 starch_ensure_audio steam-session
 
-GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled)
+# Session-scoped perf preset. Restores prior state via the EXIT trap that
+# starch_session_begin installed — STARCH_SESSION_PRE_END fires inside it.
+sudo -n /usr/local/bin/starch-perf-mode on >/dev/null 2>&1 || \
+    echo "[steam-session] WARNING: starch-perf-mode on failed (check sudoers drop-in)"
+STARCH_SESSION_PRE_END='sudo -n /usr/local/bin/starch-perf-mode off >/dev/null 2>&1 || true'
+
+GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled --mangoapp)
 
 REFRESH=$(starch_probe_refresh)
 [ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"
@@ -38,6 +38,7 @@ fi
 mapfile -t PRIME_ENV < <(starch_prime_env env)
 
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
+
 if [ ${#PRIME_ENV[@]} -gt 0 ]; then
     starch_run_compositor steam-session -- \
         dbus-run-session gamescope "${GAMESCOPE_ARGS[@]}" -- \

@@ -1,0 +1,112 @@
+#!/bin/bash
+# Toggle session-scoped performance tweaks. Replaces gamemode for the starch
+# Steam session: gamemode shells out to nvidia-settings (X11-only) for its
+# GPU bits, which never worked under our Wayland/gamescope setup, and its
+# CPU bits are duplicated by anything that pins the governor.
+#
+# `on` snapshots current values to /run/starch/perf.state and applies the
+# perf preset for the active STARCH_PROFILE. `off` restores from the
+# snapshot. If the snapshot is missing (crash, manual call), `off` falls
+# back to safe defaults (schedutil governor, persistence-mode off) rather
+# than leaving the box stuck in performance mode.
+
+set -uo pipefail
+
+. /usr/local/lib/starch/profile.sh
+starch_profile_init >/dev/null || exit 1
+
+STATE_DIR=/run/starch
+STATE_FILE=$STATE_DIR/perf.state
+
+cmd="${1:-}"
+
+apply_governor() {
+    local target="$1" g
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] || continue
+        echo "$target" > "$g" 2>/dev/null || true
+    done
+}
+
+case "$cmd" in
+on)
+    mkdir -p "$STATE_DIR"
+    : > "$STATE_FILE"
+
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -r "$g" ] || continue
+        printf 'GOV=%s\n' "$(cat "$g")" >> "$STATE_FILE"
+        break
+    done
+    apply_governor performance
+
+    PP=/sys/firmware/acpi/platform_profile
+    if [ -w "$PP" ]; then
+        printf 'PP=%s\n' "$(cat "$PP")" >> "$STATE_FILE"
+        echo performance > "$PP" 2>/dev/null || true
+    fi
+
+    if [ "$STARCH_PROFILE" = "amd" ]; then
+        for d in /sys/class/drm/card*/device/power_dpm_force_performance_level; do
+            [ -w "$d" ] || continue
+            printf 'AMD=%s|%s\n' "$d" "$(cat "$d")" >> "$STATE_FILE"
+            echo high > "$d" 2>/dev/null || true
+        done
+    fi
+
+    if [ "$STARCH_PROFILE" = "nvidia" ] || [ "$STARCH_PROFILE" = "optimus" ]; then
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            if nvidia-smi -pm 1 >/dev/null 2>&1; then
+                printf 'NV=1\n' >> "$STATE_FILE"
+            fi
+        fi
+    fi
+    ;;
+
+off)
+    GOV=""
+    PP_OLD=""
+    NV=0
+    declare -a AMD_RESTORE=()
+    if [ -r "$STATE_FILE" ]; then
+        while IFS= read -r line; do
+            case "$line" in
+                GOV=*) GOV="${line#GOV=}" ;;
+                PP=*)  PP_OLD="${line#PP=}" ;;
+                NV=1)  NV=1 ;;
+                AMD=*) AMD_RESTORE+=("${line#AMD=}") ;;
+            esac
+        done < "$STATE_FILE"
+    fi
+
+    # Fall back to schedutil if no snapshot — most Arch boxes default to it
+    # and it's safe everywhere except intel_pstate=active, where the kernel
+    # silently rejects it (so we don't break anything).
+    apply_governor "${GOV:-schedutil}"
+
+    if [ -w /sys/firmware/acpi/platform_profile ] && [ -n "$PP_OLD" ]; then
+        echo "$PP_OLD" > /sys/firmware/acpi/platform_profile 2>/dev/null || true
+    fi
+
+    if [ "$STARCH_PROFILE" = "amd" ]; then
+        for entry in "${AMD_RESTORE[@]+"${AMD_RESTORE[@]}"}"; do
+            path="${entry%%|*}"
+            val="${entry#*|}"
+            [ -w "$path" ] && echo "$val" > "$path" 2>/dev/null || true
+        done
+    fi
+
+    if [ "$NV" = "1" ] || [ "$STARCH_PROFILE" = "nvidia" ] || [ "$STARCH_PROFILE" = "optimus" ]; then
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi -pm 0 >/dev/null 2>&1 || true
+        fi
+    fi
+
+    rm -f "$STATE_FILE"
+    ;;
+
+*)
+    echo "usage: $0 {on|off}" >&2
+    exit 2
+    ;;
+esac

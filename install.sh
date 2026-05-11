@@ -81,11 +81,9 @@ PACKAGES=(
     flatpak
     foot
     fuzzel
-    gamemode
     gamescope
     jack2
     jq
-    lib32-gamemode
     lib32-mangohud
     lib32-mesa
     lib32-pipewire
@@ -231,12 +229,19 @@ install -Dm644 "$SCRIPT_DIR/etc/sysctl.d/99-gaming.conf" \
     /etc/sysctl.d/99-starch-gaming.conf
 info "  /etc/sysctl.d/99-starch-gaming.conf"
 
-case "$HW_PROFILE" in
-    amd) GAMEMODE_SRC="$SCRIPT_DIR/etc/gamemode-amd.ini" ;;
-    *)   GAMEMODE_SRC="$SCRIPT_DIR/etc/gamemode-nvidia.ini" ;;
-esac
-install -Dm644 "$GAMEMODE_SRC" /etc/gamemode.ini
-info "  /etc/gamemode.ini ($HW_PROFILE)"
+# Clean up gamemode artifacts from prior installs — replaced by
+# starch-perf-mode (session-scoped, gamemode never worked on Wayland anyway).
+for stale in /etc/gamemode.ini; do
+    [ -e "$stale" ] && rm -f "$stale" && info "  Removed stale $stale"
+done
+
+install -Dm755 "$SCRIPT_DIR/scripts/starch-perf-mode" \
+    /usr/local/bin/starch-perf-mode
+info "  /usr/local/bin/starch-perf-mode"
+
+sed "s/@@GAMING_USER@@/$GAMING_USER/" "$SCRIPT_DIR/etc/sudoers.d/starch-perf" \
+    | install -Dm440 /dev/stdin /etc/sudoers.d/starch-perf
+info "  /etc/sudoers.d/starch-perf ($GAMING_USER)"
 
 install -Dm644 "$SCRIPT_DIR/etc/NetworkManager/conf.d/iwd-backend.conf" \
     /etc/NetworkManager/conf.d/iwd-backend.conf
@@ -491,7 +496,7 @@ chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config" "$GAMING_HOME/.local" 
 
 step "Configuring user groups for $GAMING_USER"
 
-for group in input video audio seat gamemode lp; do
+for group in input video audio seat lp; do
     if getent group "$group" &>/dev/null; then
         usermod -aG "$group" "$GAMING_USER"
         info "  Added $GAMING_USER to group: $group"
@@ -502,15 +507,17 @@ done
 
 step "Enabling services"
 
-install -Dm644 "$SCRIPT_DIR/etc/systemd/system/starch-cpu-performance.service" \
-    /etc/systemd/system/starch-cpu-performance.service
-info "  /etc/systemd/system/starch-cpu-performance.service"
-systemctl daemon-reload
-systemctl enable starch-cpu-performance.service
-info "  starch-cpu-performance.service enabled"
-systemctl start  starch-cpu-performance.service 2>/dev/null \
-    && info "  starch-cpu-performance.service started" \
-    || warn "  starch-cpu-performance.service start failed (non-fatal; will run on next boot)"
+# Retire the prior system-wide governor pin — perf is session-scoped now.
+if systemctl list-unit-files starch-cpu-performance.service &>/dev/null \
+   && systemctl is-enabled starch-cpu-performance.service &>/dev/null; then
+    systemctl disable --now starch-cpu-performance.service 2>/dev/null || true
+    info "  Disabled stale starch-cpu-performance.service (replaced by starch-perf-mode)"
+fi
+if [ -e /etc/systemd/system/starch-cpu-performance.service ]; then
+    rm -f /etc/systemd/system/starch-cpu-performance.service
+    systemctl daemon-reload
+    info "  Removed /etc/systemd/system/starch-cpu-performance.service"
+fi
 
 systemctl enable sddm.service
 info "  sddm.service enabled"

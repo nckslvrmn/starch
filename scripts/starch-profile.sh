@@ -206,6 +206,9 @@ starch_session_begin() {
 
 _starch_session_end() {
     local rc="$1"
+    if [ -n "${STARCH_SESSION_PRE_END:-}" ]; then
+        eval "$STARCH_SESSION_PRE_END" || true
+    fi
     echo "[${STARCH_SESSION_NAME}-session] END rc=$rc $(date '+%Y-%m-%d %H:%M:%S')"
     if [ "$rc" -ne 0 ] && [ -r "$STARCH_SESSION_LOG" ]; then
         local crash="${STARCH_SESSION_LOG%-session.log}-last-crash.log"
