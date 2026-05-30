@@ -104,6 +104,33 @@ _starch_resolve_primary_output() {
     esac
 }
 
+# gamescope's --prefer-output takes a comma-separated priority list and picks
+# the first present connector. Externals first (auto/external), internal as
+# fallback, so docking prefers the external and unplug returns to internal with
+# no reboot. Echoes the comma-joined list.
+_starch_output_priority_list() {
+    _starch_load_user_pref
+    local -a ext=() int=()
+    local name status
+    while read -r name status; do
+        [ "$status" = "connected" ] || continue
+        if _starch_is_internal_connector "$name"; then
+            int+=("$name")
+        else
+            ext+=("$name")
+        fi
+    done < <(_starch_list_connectors)
+
+    local -a ordered=()
+    case "$STARCH_PRIMARY_PREF" in
+        internal) ordered=("${int[@]}") ;;
+        external|auto|*) ordered=("${ext[@]}" "${int[@]}") ;;
+    esac
+
+    local IFS=,
+    printf '%s\n' "${ordered[*]}"
+}
+
 starch_profile_init() {
     _starch_load_profile || return 1
     _starch_find_cards
@@ -132,11 +159,12 @@ starch_profile_init() {
     fi
 
     _starch_resolve_primary_output
+    STARCH_OUTPUT_PRIORITY="$(_starch_output_priority_list || true)"
 
     export STARCH_PROFILE STARCH_REFRESH_FALLBACK \
            STARCH_NVIDIA_CARD STARCH_INTEL_CARD STARCH_AMD_CARD \
            STARCH_DISPLAY_CARD STARCH_RENDER_CARD \
-           STARCH_PRIMARY_PREF STARCH_PRIMARY_OUTPUT
+           STARCH_PRIMARY_PREF STARCH_PRIMARY_OUTPUT STARCH_OUTPUT_PRIORITY
 }
 
 starch_check_gpu_modules() {
@@ -200,6 +228,7 @@ starch_session_begin() {
     echo "[${name}-session] render device:  ${STARCH_RENDER_CARD:-<none>}"
     echo "[${name}-session] primary pref:   ${STARCH_PRIMARY_PREF:-auto}"
     echo "[${name}-session] primary output: ${STARCH_PRIMARY_OUTPUT:-<any>}"
+    echo "[${name}-session] output priority: ${STARCH_OUTPUT_PRIORITY:-<any>}"
 
     trap '_starch_session_end $?' EXIT
 }
@@ -217,14 +246,11 @@ _starch_session_end() {
     fi
 }
 
-# Wait for the default audio sink to *stabilise* — not just exist. SDDM
-# unlocks the session before WirePlumber's policy pass has finished, so the
-# first default sink can be WirePlumber's `auto_null` fallback or an HDA
-# stub that gets replaced by HDMI/Bluetooth a moment later. Steam's
-# gamepadui latches its audio stream onto the first default and never
-# migrates — the boot video has sound, nothing after that does. Poll
-# node.name, reject auto_null/dummy, and require it to hold steady before
-# returning.
+# Wait for the default sink to *stabilise*, not just exist. SDDM unlocks before
+# WirePlumber's policy pass finishes, so the first default can be auto_null or
+# an HDA stub later replaced by HDMI/Bluetooth — and Steam gamepadui latches the
+# first default forever (boot video has sound, nothing after). Reject
+# auto_null/dummy and require node.name to hold steady before returning.
 starch_ensure_audio() {
     local tag="${1:-starch}"
     local timeout_ds="${2:-150}"
@@ -261,6 +287,40 @@ starch_ensure_audio() {
 
     echo "[$tag] WARNING: default audio sink did not stabilise after $((timeout_ds / 10))s — continuing"
     return 1
+}
+
+# Pick the backlight device gamescope should drive. Targeting an inactive one
+# (machines expose several) moves the slider but changes nothing. Prefer the
+# profile's expected device, else the highest max_brightness (firmware
+# acpi_video0 caps low, so the real panel wins). Echoes the basename or nothing.
+starch_backlight_device() {
+    local dir base best="" best_max=-1 max
+    local -a prefer=()
+    case "$STARCH_PROFILE" in
+        optimus) prefer=(intel_backlight) ;;
+        amd)     prefer=(amdgpu_bl0 amdgpu_bl1) ;;
+        nvidia)  prefer=(nvidia_0 nvidia_wmi_ec_backlight) ;;
+    esac
+
+    local p
+    for p in "${prefer[@]}"; do
+        if [ -r "/sys/class/backlight/$p/brightness" ]; then
+            printf '%s\n' "$p"
+            return 0
+        fi
+    done
+
+    for dir in /sys/class/backlight/*; do
+        [ -r "$dir/max_brightness" ] || continue
+        base="${dir##*/}"
+        read -r max < "$dir/max_brightness" 2>/dev/null || continue
+        if [ "${max:-0}" -gt "$best_max" ] 2>/dev/null; then
+            best_max="$max"
+            best="$base"
+        fi
+    done
+
+    [ -n "$best" ] && printf '%s\n' "$best"
 }
 
 starch_probe_refresh() {

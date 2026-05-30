@@ -1,4 +1,3 @@
-# Lets the Steam session flip the perf preset on/off without prompting.
-# Scoped to one binary; the script itself only writes a fixed set of sysfs
-# paths and shells nvidia-smi. @@GAMING_USER@@ is substituted at install time.
+# Lets the Steam session flip the perf preset without prompting. Scoped to one
+# binary; @@GAMING_USER@@ is substituted at install time.
 @@GAMING_USER@@ ALL=(root) NOPASSWD: /usr/local/bin/starch-perf-mode

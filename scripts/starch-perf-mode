@@ -1,14 +1,9 @@
 #!/bin/bash
-# Toggle session-scoped performance tweaks. Replaces gamemode for the starch
-# Steam session: gamemode shells out to nvidia-settings (X11-only) for its
-# GPU bits, which never worked under our Wayland/gamescope setup, and its
-# CPU bits are duplicated by anything that pins the governor.
-#
-# `on` snapshots current values to /run/starch/perf.state and applies the
-# perf preset for the active STARCH_PROFILE. `off` restores from the
-# snapshot. If the snapshot is missing (crash, manual call), `off` falls
-# back to safe defaults (schedutil governor, persistence-mode off) rather
-# than leaving the box stuck in performance mode.
+# Toggle session-scoped perf tweaks (replaces gamemode, whose X11-only GPU bits
+# never worked under gamescope). `on` snapshots current values to
+# /run/starch/perf.state and applies the preset for STARCH_PROFILE; `off`
+# restores from it, falling back to safe defaults (schedutil, persistence off)
+# if the snapshot is missing.
 
 set -uo pipefail
 
@@ -54,11 +49,9 @@ on)
         done
     fi
 
-    # Persistence mode (`nvidia-smi -pm 1`) on the optimus profile fights
-    # NVreg_DynamicPowerManagement=0x02: the driver stays attached while
-    # runtime PM tries to D3cold the dGPU, and PRIME-offloaded games render
-    # black scenes with only UI/cursor visible. Only enable on the nvidia
-    # (desktop, no runtime PM) profile.
+    # Persistence mode fights NVreg_DynamicPowerManagement on optimus (dGPU stays
+    # attached while runtime PM tries to D3cold it → PRIME games render black).
+    # Only on nvidia (desktop, no runtime PM).
     if [ "$STARCH_PROFILE" = "nvidia" ]; then
         if command -v nvidia-smi >/dev/null 2>&1; then
             if nvidia-smi -pm 1 >/dev/null 2>&1; then
@@ -84,9 +77,8 @@ off)
         done < "$STATE_FILE"
     fi
 
-    # Fall back to schedutil if no snapshot — most Arch boxes default to it
-    # and it's safe everywhere except intel_pstate=active, where the kernel
-    # silently rejects it (so we don't break anything).
+    # Fall back to schedutil if no snapshot — safe everywhere except
+    # intel_pstate=active, where the kernel just rejects it.
     apply_governor "${GOV:-schedutil}"
 
     if [ -w /sys/firmware/acpi/platform_profile ] && [ -n "$PP_OLD" ]; then

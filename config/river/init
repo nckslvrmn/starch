@@ -1,78 +1,26 @@
 #!/bin/bash
 
-_configure_displays() {
-    if ! command -v wlr-randr >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-        echo "[river/init] wlr-randr or jq not found — skipping display configuration"
-        return
+# way-displays handles display hotplug live (arrange, DPI scale, VRR, lid) so
+# plugging in HDMI moves the desktop with no reboot. Config: ~/.config/way-displays/cfg.yaml.
+_start_display_daemon() {
+    if command -v way-displays >/dev/null 2>&1; then
+        echo "[river/init] starting way-displays (reactive display hotplug)"
+        way-displays >"${XDG_STATE_HOME:-$HOME/.local/state}/way-displays.log" 2>&1 &
+    elif command -v wlr-randr >/dev/null 2>&1; then
+        # Fallback if the daemon is missing: one-shot, no hotplug.
+        echo "[river/init] way-displays not found — one-shot wlr-randr fallback"
+        local primary="${STARCH_PRIMARY_OUTPUT:-}"
+        [ -n "$primary" ] && wlr-randr --output "$primary" --on 2>/dev/null || true
+    else
+        echo "[river/init] no display manager (way-displays/wlr-randr) found — leaving outputs as-is"
     fi
-
-    local wlr_json
-    wlr_json=$(wlr-randr --json 2>/dev/null) || {
-        echo "[river/init] wlr-randr failed — skipping display configuration"
-        return
-    }
-
-    local primary="${STARCH_PRIMARY_OUTPUT:-}"
-    local cursor_x=0
-
-    _apply_output() {
-        local name="$1" width="$2" height="$3" refresh_mhz="$4"
-        local refresh_hz
-        if [ "$refresh_mhz" -gt 1000 ] 2>/dev/null; then
-            refresh_hz=$(( refresh_mhz / 1000 ))
-        else
-            refresh_hz="$refresh_mhz"
-        fi
-
-        local scale="1"
-        if [ "$height" -ge 2160 ]; then
-            scale="2"
-        elif [ "$height" -ge 1440 ]; then
-            scale="1.5"
-        fi
-
-        echo "[river/init] enabling $name @ ${width}x${height}@${refresh_hz}Hz scale=${scale} pos=${cursor_x},0"
-        wlr-randr --output "$name" --on \
-            --mode "${width}x${height}@${refresh_hz}" \
-            --scale "$scale" \
-            --pos "${cursor_x},0"
-
-        cursor_x=$(( cursor_x + width * 10 / $(awk -v s="$scale" 'BEGIN{print int(s*10)}') ))
-    }
-
-    local name width height refresh_mhz
-    if [ -n "$primary" ]; then
-        while IFS=$'\t' read -r name width height refresh_mhz; do
-            [ "$name" = "$primary" ] || continue
-            _apply_output "$name" "$width" "$height" "$refresh_mhz"
-        done < <(echo "$wlr_json" | jq -r '
-            .[] |
-            (.modes | max_by(.refresh)) as $m |
-            [.name,
-             ($m.width  | tostring),
-             ($m.height | tostring),
-             ($m.refresh | tostring)] | @tsv
-        ')
-    fi
-
-    while IFS=$'\t' read -r name width height refresh_mhz; do
-        [ "$name" = "$primary" ] && continue
-        _apply_output "$name" "$width" "$height" "$refresh_mhz"
-    done < <(echo "$wlr_json" | jq -r '
-        .[] |
-        (.modes | max_by(.refresh)) as $m |
-        [.name,
-         ($m.width  | tostring),
-         ($m.height | tostring),
-         ($m.refresh | tostring)] | @tsv
-    ')
 }
 
 systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY
 dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY
 systemctl --user restart xdg-desktop-portal
 
-_configure_displays
+_start_display_daemon
 
 riverctl map normal Alt Shift Tab focus-prev
 riverctl map normal Alt Tab       focus-next

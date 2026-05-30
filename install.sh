@@ -102,7 +102,9 @@ PACKAGES=(
     sddm
     sof-firmware
     steam
+    upower
     vulkan-icd-loader
+    way-displays
     wireplumber
     wl-clipboard
     wlr-randr
@@ -312,11 +314,12 @@ install -Dm755 "$SCRIPT_DIR/scripts/starch-audio-port-watcher" \
     /usr/local/bin/starch-audio-port-watcher
 info "  /usr/local/bin/starch-audio-port-watcher"
 
-# Per-login oneshot so HDMI ports that come and go with display plug state
-# are re-discovered. starch-audio-setup is idempotent.
+# Virtual-sink setup is opt-in now; default audio is native WirePlumber
+# (50-starch.conf). Ship the unit but don't auto-enable it, and disable any
+# prior global enablement so existing installs migrate.
 cat > /etc/systemd/user/starch-audio-setup.service <<'EOF'
 [Unit]
-Description=starch audio virtual-sink setup
+Description=starch audio virtual-sink setup (opt-in advanced mode)
 After=pipewire.service pipewire-pulse.service wireplumber.service
 Wants=pipewire.service pipewire-pulse.service wireplumber.service
 ConditionPathExists=/usr/local/bin/starch-audio-setup
@@ -330,10 +333,21 @@ RemainAfterExit=yes
 [Install]
 WantedBy=default.target
 EOF
-info "  /etc/systemd/user/starch-audio-setup.service"
+info "  /etc/systemd/user/starch-audio-setup.service (opt-in — not auto-enabled)"
 
-systemctl --global enable starch-audio-setup.service >/dev/null 2>&1 || true
-info "  enabled (global) starch-audio-setup.service"
+systemctl --global disable starch-audio-setup.service >/dev/null 2>&1 || true
+
+# Migrate existing installs: the generated virtual-sink PipeWire conf loads
+# loopback modules on every pipewire start (independent of the unit), so it'd
+# run alongside native WirePlumber. Remove the generated artifacts — regenerated
+# if the user re-runs starch-audio-setup.
+for f in \
+    "$GAMING_HOME/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf" \
+    "$GAMING_HOME/.config/starch/audio-sinks.conf" \
+    "$GAMING_HOME/.config/systemd/user/default.target.wants/starch-audio-port-watcher.service" \
+    "$GAMING_HOME/.config/systemd/user/default.target.wants/starch-audio-setup.service"; do
+    [ -e "$f" ] && rm -f "$f" && info "  Removed stale virtual-sink artifact $f (migrated to native WirePlumber)"
+done
 
 # Realtek HDA ships 'Line Out' at 0% and 'Auto-Mute Mode' off, silently
 # gating analog output. Persist via alsactl so alsa-restore brings it back.
@@ -371,9 +385,17 @@ else
     done
 fi
 
+# /usr/local/bin, not /usr/bin (package territory). It's on PATH inside the
+# Steam bwrap namespace, so the button still resolves it by bare name.
 install -Dm755 "$SCRIPT_DIR/scripts/steamos-session-select" \
-    /usr/bin/steamos-session-select
-info "  /usr/bin/steamos-session-select"
+    /usr/local/bin/steamos-session-select
+info "  /usr/local/bin/steamos-session-select"
+
+# Remove the stale /usr/bin copy prior installs dropped into package territory.
+if [ -e /usr/bin/steamos-session-select ]; then
+    rm -f /usr/bin/steamos-session-select
+    info "  Removed stale /usr/bin/steamos-session-select (moved to /usr/local/bin)"
+fi
 
 step "Configuring Flatpak and installing Plex HTPC"
 
@@ -453,17 +475,29 @@ fi
 
 step "Installing Wayland session descriptors"
 
-install -Dm644 "$SCRIPT_DIR/sessions/steam.desktop" \
-    /usr/share/wayland-sessions/steam.desktop
-info "  /usr/share/wayland-sessions/steam.desktop"
+# Install into /usr/local/share/wayland-sessions, not /usr/share: SDDM scans
+# only here (SessionDir in 10-wayland.conf), so we never overwrite the river
+# package's river.desktop and its "River" entry stays out of the greeter.
+SESSION_DIR=/usr/local/share/wayland-sessions
 
-install -Dm644 "$SCRIPT_DIR/sessions/river.desktop" \
-    /usr/share/wayland-sessions/river.desktop
-info "  /usr/share/wayland-sessions/river.desktop (overwritten)"
+install -Dm644 "$SCRIPT_DIR/sessions/steam.desktop" \
+    "$SESSION_DIR/steam.desktop"
+info "  $SESSION_DIR/steam.desktop"
+
+install -Dm644 "$SCRIPT_DIR/sessions/starch-river.desktop" \
+    "$SESSION_DIR/starch-river.desktop"
+info "  $SESSION_DIR/starch-river.desktop"
 
 install -Dm644 "$SCRIPT_DIR/sessions/plex.desktop" \
-    /usr/share/wayland-sessions/plex.desktop
-info "  /usr/share/wayland-sessions/plex.desktop"
+    "$SESSION_DIR/plex.desktop"
+info "  $SESSION_DIR/plex.desktop"
+
+# Remove starch session files prior installs left in /usr/share. Leave any
+# river.desktop there — it's the package's, and SDDM no longer scans that dir.
+for stale in /usr/share/wayland-sessions/steam.desktop \
+             /usr/share/wayland-sessions/plex.desktop; do
+    [ -e "$stale" ] && rm -f "$stale" && info "  Removed stale $stale (moved to $SESSION_DIR)"
+done
 
 step "Installing River configuration for $GAMING_USER"
 
@@ -486,6 +520,18 @@ install -Dm644 "$SCRIPT_DIR/config/brave-flags.conf" \
     "$GAMING_HOME/.config/brave-flags.conf"
 chown "$GAMING_USER:$GAMING_GROUP" "$GAMING_HOME/.config/brave-flags.conf"
 info "  $GAMING_HOME/.config/brave-flags.conf"
+
+install -Dm644 -o "$GAMING_USER" -g "$GAMING_GROUP" \
+    "$SCRIPT_DIR/config/way-displays/cfg.yaml" \
+    "$GAMING_HOME/.config/way-displays/cfg.yaml"
+info "  $GAMING_HOME/.config/way-displays/cfg.yaml"
+
+# Native WirePlumber audio: per-device volume persistence + follow-HDMI. This
+# is the default audio path (the virtual-sink starch-audio-setup is opt-in).
+install -Dm644 -o "$GAMING_USER" -g "$GAMING_GROUP" \
+    "$SCRIPT_DIR/config/wireplumber/wireplumber.conf.d/50-starch.conf" \
+    "$GAMING_HOME/.config/wireplumber/wireplumber.conf.d/50-starch.conf"
+info "  $GAMING_HOME/.config/wireplumber/wireplumber.conf.d/50-starch.conf"
 
 install -Dm644 "$SCRIPT_DIR/config/xdg-desktop-portal/portals.conf" \
     "$GAMING_HOME/.config/xdg-desktop-portal/portals.conf"
@@ -532,6 +578,16 @@ fi
 if systemctl list-unit-files --quiet bluetooth.service 2>/dev/null | grep -q bluetooth; then
     systemctl enable bluetooth.service
     info "  bluetooth.service enabled"
+fi
+
+# upower drives Steam's battery indicator. The unit is D-Bus activated (no
+# [Install]), so Steam starts it on demand; we just kick it now.
+if systemctl list-unit-files --quiet upower.service 2>/dev/null | grep -q upower; then
+    systemctl start upower.service 2>/dev/null \
+        && info "  upower.service started (battery indicator)" \
+        || info "  upower.service present (D-Bus activated on demand)"
+else
+    warn "  upower.service not found — Steam won't show a battery indicator"
 fi
 
 if [ "$HW_PROFILE" != "amd" ]; then

@@ -12,14 +12,16 @@ starch_apply_gpu_env
 export PROTON_ENABLE_NVAPI=1
 export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
 export STEAM_GAMESCOPE_SESSION=1
+# Exposes the gamepadui brightness slider/keys; the 70-starch-gaming udev rule
+# grants the sysfs write it needs.
+export STEAM_ENABLE_DYNAMIC_BACKLIGHT=1
 
 XDG_RUNTIME_DIR=/run/user/$(id -u)
 export XDG_RUNTIME_DIR
 
 starch_ensure_audio steam-session
 
-# Session-scoped perf preset. Restores prior state via the EXIT trap that
-# starch_session_begin installed — STARCH_SESSION_PRE_END fires inside it.
+# Session-scoped perf preset; STARCH_SESSION_PRE_END restores it in the EXIT trap.
 sudo -n /usr/local/bin/starch-perf-mode on >/dev/null 2>&1 || \
     echo "[steam-session] WARNING: starch-perf-mode on failed (check sudoers drop-in)"
 STARCH_SESSION_PRE_END='sudo -n /usr/local/bin/starch-perf-mode off >/dev/null 2>&1 || true'
@@ -29,7 +31,9 @@ GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled --ma
 REFRESH=$(starch_probe_refresh)
 [ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"
 
-[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
+# Priority list so gamescope prefers the external when docked, internal fallback.
+PREFER_OUTPUT="${STARCH_OUTPUT_PRIORITY:-${STARCH_PRIMARY_OUTPUT:-}}"
+[ -n "$PREFER_OUTPUT" ] && GAMESCOPE_ARGS+=(--prefer-output "$PREFER_OUTPUT")
 
 
 mapfile -t PRIME_ENV < <(starch_prime_env env)

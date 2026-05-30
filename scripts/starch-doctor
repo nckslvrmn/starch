@@ -91,6 +91,33 @@ if compgen -G '/sys/class/drm/card*-*/status' >/dev/null; then
     fi
 fi
 
+section "Backlight (Steam brightness slider)"
+
+if compgen -G '/sys/class/backlight/*' >/dev/null 2>&1; then
+    # Reuse the profile library's detection so doctor and the sessions agree.
+    BL=""
+    if [ -r /usr/local/lib/starch/profile.sh ]; then
+        # shellcheck disable=SC1091
+        . /usr/local/lib/starch/profile.sh
+        BL=$(starch_backlight_device 2>/dev/null || true)
+    fi
+    if [ -n "$BL" ]; then
+        check "backlight device detected" pass "$BL"
+        bf="/sys/class/backlight/$BL/brightness"
+        if [ -w "$bf" ]; then
+            check "$bf writable by session" pass
+        else
+            owner=$(stat -c '%G' "$bf" 2>/dev/null || echo '?')
+            check "$bf writable by session" warn \
+                "group=$owner — reboot after install so the udev rule + 'video' group apply; slider needs g+w"
+        fi
+    else
+        check "backlight device detected" warn "no usable /sys/class/backlight device (pure-NVIDIA panels often expose none)"
+    fi
+else
+    check "backlight class present" warn "no /sys/class/backlight — internal-panel brightness control unavailable"
+fi
+
 section "Required binaries"
 
 for bin in gamescope steam cage wpctl modetest udevadm sddm flatpak jq wlr-randr; do
@@ -118,6 +145,19 @@ if [ "${STARCH_PROFILE:-}" != "amd" ]; then
     done
 fi
 
+section "Power / battery (Steam gamepadui)"
+
+if command -v upower >/dev/null 2>&1; then
+    check "upower installed" pass
+    if upower -e 2>/dev/null | grep -q 'battery'; then
+        check "battery device present" pass "$(upower -e 2>/dev/null | grep battery | tr '\n' ' ')"
+    else
+        check "battery device present" warn "no battery enumerated (desktop, or upower not yet activated) — fine on a desktop"
+    fi
+else
+    check "upower installed" warn "not installed — Steam won't show a battery indicator on laptops"
+fi
+
 section "Flatpak / Plex"
 
 if flatpak info --system tv.plex.PlexHTPC &>/dev/null; then
@@ -143,11 +183,19 @@ fi
 
 section "Sessions installed"
 
-for s in steam river plex; do
-    if [ -e "/usr/share/wayland-sessions/$s.desktop" ]; then check "$s.desktop" pass
-    else check "$s.desktop" warn "missing — re-run install.sh"
+for s in steam plex starch-river; do
+    if [ -e "/usr/local/share/wayland-sessions/$s.desktop" ]; then check "$s.desktop" pass
+    else check "$s.desktop" warn "missing from /usr/local/share/wayland-sessions — re-run install.sh"
     fi
 done
+
+# SDDM must scan only the starch session dir, else upstream river.desktop shows.
+if grep -rqs '^SessionDir=/usr/local/share/wayland-sessions' /etc/sddm.conf.d/ 2>/dev/null; then
+    check "SDDM SessionDir scoped to starch sessions" pass
+else
+    check "SDDM SessionDir scoped to starch sessions" warn \
+        "SessionDir not set — upstream river.desktop may show in the greeter"
+fi
 
 for s in start-steam start-plex start-river starch-steam-launch steamos-session-select starch-select-display; do
     p=$(command -v "$s" 2>/dev/null || true)
@@ -155,6 +203,17 @@ for s in start-steam start-plex start-river starch-steam-launch steamos-session-
     else check "$s executable" fail "missing or not executable"
     fi
 done
+
+# Steam's "Switch to Desktop" invokes `steamos-session-select plasma`; verify it
+# accepts that without erroring (a prior strict case broke the button silently).
+if command -v steamos-session-select >/dev/null 2>&1; then
+    if steamos-session-select --dry-run plasma >/dev/null 2>&1; then
+        check "steamos-session-select accepts 'plasma'" pass "(Switch to Desktop wired correctly)"
+    else
+        check "steamos-session-select accepts 'plasma'" fail \
+            "dry-run rejected 'plasma' — Switch to Desktop will be a no-op"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 printf '\nSummary: %s pass, %s warn, %s fail\n' "$(green "$PASS")" "$(yellow "$WARN")" "$(red "$FAIL")"

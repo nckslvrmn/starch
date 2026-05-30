@@ -1,8 +1,8 @@
 #!/bin/bash
-# Discover audio output ports across all sound cards and expose each as a
-# selectable PipeWire sink. Per-port virtual sinks loopback to the
-# underlying ALSA sink; a user-level watcher flips the card profile/port
-# when one is selected as default. Run as the gaming user, not root.
+# ADVANCED / OPT-IN. The default audio path is native WirePlumber (see
+# wireplumber.conf.d/50-starch.conf). This older virtual-sink mode exposes every
+# output port as a separately selectable PipeWire sink (per-port loopback +
+# a watcher that flips the card profile on selection). Run as the user, not root.
 set -u
 
 green() { printf '\e[32m[starch]\e[0m %s\n' "$*"; }
@@ -116,10 +116,8 @@ printf '%s\n' "$PORTS" | while IFS=$'\t' read -r card port type avail desc profi
         "$desc" "$type" "$avail" "$card" "$profile" "$sink"
 done
 
-# Only expose ports whose target ALSA sink currently exists — otherwise
-# WirePlumber "rescues" the loopback's playback stream onto the default
-# sink and creates audio feedback. For HDMI this means re-running after
-# plugging in a display so the profile activates and the sink materializes.
+# Only expose ports whose target ALSA sink exists, else WirePlumber rescues the
+# loopback onto the default sink and feeds back. (HDMI: re-run once plugged in.)
 EXISTING_SINKS=$(pactl list short sinks | awk '{print $2}')
 
 SELECTED_FILE=$(mktemp)
@@ -202,9 +200,7 @@ systemctl --user enable --now starch-audio-port-watcher.service >/dev/null
 NEW_HASH=$(sha256sum "$PW_CONF" | awk '{print $1}')
 
 if [ "$PREV_HASH" != "$NEW_HASH" ]; then
-    # Wipe persisted volumes so virtual sinks don't inherit attenuated levels
-    # from a previous generation.
-    rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/"*restore-stream* 2>/dev/null || true
+    # No restore-stream wipe here — that was the "volume resets every boot" bug.
     systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
     green "PipeWire config changed → restarted pipewire/wireplumber."
 else
@@ -215,12 +211,10 @@ for _ in $(seq 1 10); do
     if pactl list short sinks | grep -q starch-out-; then break; fi
     sleep 0.3
 done
-# Force loopback links explicitly — WirePlumber will otherwise cross-link
-# virtual sinks to each other when several are in the graph.
+# Link loopbacks explicitly, else WirePlumber cross-links virtual sinks to each
+# other when several are in the graph.
 while IFS=$'\t' read -r card port type avail desc profile sink; do
     slug=$(slug "$desc")
-    pactl set-sink-volume "starch-out-$slug" 100% 2>/dev/null || true
-    pactl set-sink-mute "starch-out-$slug" 0 2>/dev/null || true
     pw-link "starch-out-$slug.playback:output_FL" "$sink:playback_FL" 2>/dev/null || true
     pw-link "starch-out-$slug.playback:output_FR" "$sink:playback_FR" 2>/dev/null || true
 done < "$SELECTED_FILE"

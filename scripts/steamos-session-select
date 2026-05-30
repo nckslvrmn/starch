@@ -1,19 +1,57 @@
 #!/bin/bash
+# Steam's "Switch to Desktop" invokes this with a target (on SteamOS, `plasma`).
+# starch has no separate desktop — tearing Steam down returns to SDDM — so any
+# desktop-ish target just means `steam -shutdown`. A prior strict case matched
+# only desktop|gamescope and errored on `plasma`, silently breaking the button.
 set -u
 
-case "${1:-}" in
-    desktop|gamescope) ;;
-    ""|-h|--help)
-        echo "Usage: steamos-session-select {desktop|gamescope}"
-        exit 1
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/starch/steam-session-select.log"
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+log() { printf '%s steamos-session-select: %s\n' "$(date '+%F %T')" "$*" >> "$LOG" 2>/dev/null || true; }
+
+DRY_RUN=0
+TARGET=""
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        -h|--help)
+            echo "Usage: steamos-session-select [--dry-run] [TARGET]"
+            echo "  TARGET: plasma | plasma-*-persistent | desktop | gamescope (default: desktop)"
+            echo "  Any desktop-ish TARGET shuts Steam down and returns to SDDM."
+            echo "  --dry-run validates the argument and exits 0 without touching Steam."
+            exit 0
+            ;;
+        -*) ;;  # ignore unknown flags rather than failing the button
+        *) [ -z "$TARGET" ] && TARGET="$arg" ;;
+    esac
+done
+
+log "invoked argv=[$*] target='${TARGET:-<empty>}' dry_run=$DRY_RUN"
+
+case "$TARGET" in
+    gamescope)
+        log "target=gamescope → already in the gamescope session, no-op"
+        [ "$DRY_RUN" -eq 1 ] && exit 0
+        exit 0
+        ;;
+    ""|desktop|plasma|plasma-*|gnome|gnome-*|kde|kde-*)
+        action="shutdown"
         ;;
     *)
-        echo "steamos-session-select: unknown target '$1' (expected desktop|gamescope)" >&2
-        exit 1
+        # Treat unknown targets as desktop so a future Steam rename can't break the button.
+        log "target='$TARGET' unrecognised — treating as desktop hand-off"
+        action="shutdown"
         ;;
 esac
 
+if [ "$DRY_RUN" -eq 1 ]; then
+    log "dry-run: would take '$action' path for target='${TARGET:-<empty>}' — exiting 0"
+    echo "steamos-session-select: dry-run OK (target='${TARGET:-desktop}' → $action)"
+    exit 0
+fi
+
 if ! pgrep -x gamescope >/dev/null 2>&1; then
+    log "gamescope not running — nothing to switch from"
     echo "steamos-session-select: gamescope is not running — nothing to switch from." >&2
     echo "  Log out via your current session instead, then pick one at the SDDM greeter." >&2
     exit 2
@@ -28,19 +66,28 @@ _wait_gone() {
     return 1
 }
 
-# gamescope --steam exits when Steam does, so asking Steam to quit cleanly
-# is what unwinds the whole session. SIGTERMing gamescope first hangs
-# because gamescope is waiting on Steam.
+# gamescope --steam exits when Steam does, so quitting Steam unwinds the whole
+# session. SIGTERMing gamescope first hangs — it's waiting on Steam.
+log "requesting steam -shutdown"
 steam -shutdown >/dev/null 2>&1 || true
-_wait_gone gamescope 200 && exit 0
+if _wait_gone gamescope 200; then
+    log "gamescope exited after steam -shutdown — clean"
+    exit 0
+fi
 
+log "steam -shutdown did not unwind gamescope — escalating to SIGTERM"
 pkill -TERM -x gamescope 2>/dev/null || true
-_wait_gone gamescope 100 && exit 0
+if _wait_gone gamescope 100; then
+    log "gamescope exited after SIGTERM"
+    exit 0
+fi
 
 # SIGKILL mid-DRM-handoff can leave the GPU stuck; restart SDDM to recover.
+log "SIGTERM failed — SIGKILL gamescope/steam and restart SDDM"
 pkill -KILL -x gamescope 2>/dev/null || true
 pkill -KILL -x steam 2>/dev/null || true
 sleep 1
 if command -v systemctl >/dev/null 2>&1; then
     systemctl restart sddm.service 2>/dev/null || true
 fi
+log "done (forced path)"

@@ -19,7 +19,9 @@ GAMESCOPE_ARGS=(--backend drm -f --adaptive-sync --hdr-enabled)
 REFRESH=$(starch_probe_refresh)
 [ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[plex-session] refresh: ${REFRESH}Hz"
 
-[ -n "${STARCH_PRIMARY_OUTPUT:-}" ] && GAMESCOPE_ARGS+=(--prefer-output "$STARCH_PRIMARY_OUTPUT")
+# Priority list so the external is auto-preferred when docked, internal as fallback.
+PREFER_OUTPUT="${STARCH_OUTPUT_PRIORITY:-${STARCH_PRIMARY_OUTPUT:-}}"
+[ -n "$PREFER_OUTPUT" ] && GAMESCOPE_ARGS+=(--prefer-output "$PREFER_OUTPUT")
 
 if [ "$STARCH_PROFILE" = "optimus" ]; then
     GAMESCOPE_ARGS+=(--prefer-vk-device 8086)
