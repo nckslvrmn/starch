@@ -26,6 +26,9 @@ if ! id "$GAMING_USER" &>/dev/null; then
     exit 1
 fi
 
+GAMING_HOME=$(eval echo ~"$GAMING_USER")
+GAMING_GROUP=$(id -gn "$GAMING_USER")
+
 if ! sudo -u "$GAMING_USER" -H which paru &>/dev/null; then
     error "paru not found for user $GAMING_USER."
     error "Install paru first, then re-run this script:"
@@ -500,9 +503,6 @@ for stale in /usr/share/wayland-sessions/steam.desktop \
 done
 
 step "Installing River configuration for $GAMING_USER"
-
-GAMING_HOME=$(eval echo ~"$GAMING_USER")
-GAMING_GROUP=$(id -gn "$GAMING_USER")
 
 for _dir in \
     "$GAMING_HOME/.config/river" \
