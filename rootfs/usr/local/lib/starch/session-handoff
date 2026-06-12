@@ -13,6 +13,7 @@ set -uo pipefail
 
 REQ="@@GAMING_HOME@@/.local/state/starch/session-request"
 CONF=/etc/sddm.conf.d/zz-starch-autologin.conf
+BOOT_CONF=/etc/sddm.conf.d/20-starch-boot.conf
 
 log() { echo "starch-session-handoff: $*"; }
 
@@ -27,7 +28,7 @@ if [ -L "$REQ" ] || [ ! -f "$REQ" ] \
     exit 1
 fi
 
-target=$(head -c 64 "$REQ" | tr -cd 'a-z')
+target=$(head -c 64 "$REQ" | tr -cd 'a-z-')
 rm -f "$REQ"
 
 case "$target" in
@@ -40,6 +41,27 @@ case "$target" in
         # is back to normal afterwards. No SDDM restart for this.
         rm -f "$CONF"
         log "cleared one-shot autologin"
+        exit 0 ;;
+    boot-steam)
+        # Persistent console mode (starch-select-boot): every boot goes
+        # straight into the Steam session. The one-shot conf (zz-) sorts
+        # later, so single switches still win and then fall back to this.
+        cat > "$BOOT_CONF" <<EOF
+# Persistent boot-to-Steam, managed by starch-select-boot {steam|greeter}.
+[Autologin]
+User=@@GAMING_USER@@
+Session=steam.desktop
+EOF
+        log "boot mode set to steam ($BOOT_CONF)"
+        exit 0 ;;
+    boot-greeter)
+        rm -f "$BOOT_CONF"
+        log "boot mode set to greeter"
+        exit 0 ;;
+    reboot)
+        # Steam's post-update restart (steamos-reboot).
+        log "reboot requested"
+        systemctl reboot
         exit 0 ;;
     *)
         log "unknown target '$target' — ignoring"

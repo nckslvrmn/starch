@@ -31,8 +31,9 @@ sudo -n /usr/local/bin/starch-perf-mode on >/dev/null 2>&1 || \
 STARCH_SESSION_PRE_END='sudo -n /usr/local/bin/starch-perf-mode off >/dev/null 2>&1 || true'
 
 # --rt needs gamescope to hold CAP_SYS_NICE (granted by install.sh + a pacman
-# hook), else it drops to normal priority. --hdr-enabled drives real HDR on the
-# Mini-LED panel; SDR games still direct-scanout with no penalty.
+# hook), else it drops to normal priority. --hdr-enabled drives HDR on the
+# internal panel (DisplayHDR-400-class IPS, EDID max ~497 nits) and on HDR
+# externals; SDR games still direct-scanout with no penalty.
 GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled --mangoapp)
 
 REFRESH=$(starch_probe_refresh)
@@ -41,6 +42,15 @@ REFRESH=$(starch_probe_refresh)
 # Priority list so gamescope prefers the external when docked, internal fallback.
 PREFER_OUTPUT="${STARCH_OUTPUT_PRIORITY:-${STARCH_PRIMARY_OUTPUT:-}}"
 [ -n "$PREFER_OUTPUT" ] && GAMESCOPE_ARGS+=(--prefer-output "$PREFER_OUTPUT")
+
+# Optional tuning knobs from /etc/starch/profile.conf (sourced by profile_init).
+# All default off; see the comments there for what each does.
+[ "${STARCH_HDR_ITM:-0}" = "1" ] && GAMESCOPE_ARGS+=(--hdr-itm-enabled)
+[ -n "${STARCH_HDR_SDR_NITS:-}" ] && GAMESCOPE_ARGS+=(--hdr-sdr-content-nits "$STARCH_HDR_SDR_NITS")
+[ -n "${STARCH_SCALER:-}" ] && GAMESCOPE_ARGS+=(-F "$STARCH_SCALER")
+[ -n "${STARCH_SHARPNESS:-}" ] && GAMESCOPE_ARGS+=(--sharpness "$STARCH_SHARPNESS")
+# shellcheck disable=SC2206 — word-splitting is the point of the escape hatch
+[ -n "${STARCH_EXTRA_GAMESCOPE_ARGS:-}" ] && GAMESCOPE_ARGS+=($STARCH_EXTRA_GAMESCOPE_ARGS)
 
 echo "[steam-session] gamescope ${GAMESCOPE_ARGS[*]}"
 

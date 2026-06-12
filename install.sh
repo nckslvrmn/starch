@@ -92,12 +92,15 @@ REPO_PACKAGES=(
     libnewt                 # whiptail (starch-select-display TUI)
     libnotify
     libpulse
+    fwupd
+    libfreeaptx              # aptX for Bluetooth headphones
     mako
     mangohud
     networkmanager
     noto-fonts
     noto-fonts-emoji
     nvidia-utils
+    pacman-contrib           # checkupdates (starch-update, Steam update UI)
     pavucontrol
     pipewire
     pipewire-alsa
@@ -105,6 +108,7 @@ REPO_PACKAGES=(
     qt6-svg
     qt6-wayland
     river-classic
+    scx-scheds               # sched-ext schedulers (STARCH_SCX_SCHED)
     sddm
     slurp
     sof-firmware
@@ -191,22 +195,54 @@ fi
 # ---------------------------------------------------------------------------
 step "Writing /etc/starch/profile.conf"
 
-EXISTING_REFRESH=""
-EXISTING_SCX=""
-if [ -r /etc/starch/profile.conf ]; then
-    EXISTING_REFRESH=$(. /etc/starch/profile.conf 2>/dev/null; echo "${STARCH_REFRESH_FALLBACK:-}")
-    EXISTING_SCX=$(. /etc/starch/profile.conf 2>/dev/null; echo "${STARCH_SCX_SCHED:-}")
-fi
+# Preserve any value the user already set; defaults apply only when unset/empty.
+# set +e inside the subshell so a broken conf can't trip the installer's set -e.
+_existing() {
+    [ -r /etc/starch/profile.conf ] || return 0
+    ( set +e; . /etc/starch/profile.conf 2>/dev/null; eval "printf '%s' \"\${$1:-}\"" )
+    return 0
+}
+V_REFRESH=$(_existing STARCH_REFRESH_FALLBACK)
+V_SCX=$(_existing STARCH_SCX_SCHED); V_SCX="${V_SCX:-scx_lavd}"
+V_STEAM_UPD=$(_existing STARCH_STEAM_UPDATES); V_STEAM_UPD="${V_STEAM_UPD:-0}"
+V_ITM=$(_existing STARCH_HDR_ITM); V_ITM="${V_ITM:-0}"
+V_SDR_NITS=$(_existing STARCH_HDR_SDR_NITS)
+V_SCALER=$(_existing STARCH_SCALER)
+V_SHARP=$(_existing STARCH_SHARPNESS)
+V_EXTRA=$(_existing STARCH_EXTRA_GAMESCOPE_ARGS)
+
 cat > /etc/starch/profile.conf <<EOF
 # Fallback refresh rate (Hz) used when modetest probing fails. Set to your
 # panel's native rate so a tooling regression doesn't silently drop to 60Hz.
-STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH}
+STARCH_REFRESH_FALLBACK=${V_REFRESH}
 
-# Optional sched-ext scheduler started by starch-perf-mode while a Steam
-# session runs (e.g. scx_lavd; install the scx-scheds package). Empty = off.
-STARCH_SCX_SCHED=${EXISTING_SCX}
+# sched-ext scheduler run by starch-perf-mode during Steam sessions
+# (scx-scheds package). Default scx_lavd; empty disables.
+STARCH_SCX_SCHED=${V_SCX}
+
+# 1 = let Steam's gamepad UI check for and apply OS updates (pacman -Syu via
+# the root-side starch-update-* units). Prototype — the progress display in
+# Steam may need iteration. 0 = Steam always sees "no updates".
+STARCH_STEAM_UPDATES=${V_STEAM_UPD}
+
+# --- gamescope tuning (Steam session), all optional ---
+# SDR→HDR inverse tone mapping (1 = on). Makes SDR games use HDR headroom.
+STARCH_HDR_ITM=${V_ITM}
+# Luminance of SDR content in HDR mode. Empty = gamescope default (400).
+# Note: this laptop's panel reports max ~497 nits via EDID, so there is no
+# headroom to raise this on the internal display — set it when docked to a
+# brighter HDR TV.
+STARCH_HDR_SDR_NITS=${V_SDR_NITS}
+# Upscaler: fsr | nis | linear | nearest | pixel. Empty = gamescope default.
+# (FSR 1.0 here is shader-based and vendor-agnostic — fine on NVIDIA; nis is
+# the NVIDIA-branded equivalent.)
+STARCH_SCALER=${V_SCALER}
+# Upscaler sharpness 0 (max) – 20 (min). Empty = default.
+STARCH_SHARPNESS=${V_SHARP}
+# Extra args appended verbatim to the gamescope command line.
+STARCH_EXTRA_GAMESCOPE_ARGS="${V_EXTRA}"
 EOF
-info "  STARCH_REFRESH_FALLBACK=${EXISTING_REFRESH:-<unset>} STARCH_SCX_SCHED=${EXISTING_SCX:-<unset>}"
+info "  refresh=${V_REFRESH:-<unset>} scx=${V_SCX:-<off>} steam-updates=${V_STEAM_UPD}"
 
 install -d -m755 /var/lib/starch
 
@@ -266,11 +302,37 @@ for svc in sddm NetworkManager iwd systemd-networkd systemd-resolved \
     fi
 done
 
-# Steam ⇄ Desktop switching: the path unit watches the user's session-request
-# file (Steam's container can only talk to the host via the filesystem).
-systemctl enable starch-session-handoff.path
-systemctl start starch-session-handoff.path 2>/dev/null || true
-info "  Enabled: starch-session-handoff.path (Steam ⇄ Desktop switching)"
+# Steam ⇄ Desktop switching + Steam-UI updates: path units watch the user's
+# request files (Steam's container can only talk to the host via the
+# filesystem). The update-check timer feeds Steam's "update available" state.
+for unit in starch-session-handoff.path starch-update-apply.path \
+            starch-update-check.timer fstrim.timer paccache.timer; do
+    systemctl enable "$unit"
+    systemctl start "$unit" 2>/dev/null || true
+    info "  Enabled: $unit"
+done
+
+# logind drop-in (power button = suspend) applies on the next boot. NEVER
+# restart systemd-logind here: it removes every active session — running this
+# installer from inside river kicked the session to SDDM and left seat
+# management thrashed (every relogin's DRM fd got revoked) until a reboot.
+info "  Power-button behavior (logind drop-in) applies after reboot"
+
+# BlueZ: Experimental enables BLE battery reporting (controller battery in
+# gamepadui, headphone battery via upower); FastConnectable speeds pairing.
+# No conf.d support in bluez — edit main.conf in place (pacman treats it as a
+# backup file, so upgrades leave it alone and drop a .pacnew).
+if [ -f /etc/bluetooth/main.conf ]; then
+    _bt_before=$(md5sum /etc/bluetooth/main.conf)
+    sed -i -E \
+        -e 's|^[#[:space:]]*Experimental[[:space:]]*=.*|Experimental = true|' \
+        -e 's|^[#[:space:]]*FastConnectable[[:space:]]*=.*|FastConnectable = true|' \
+        /etc/bluetooth/main.conf
+    if [ "$_bt_before" != "$(md5sum /etc/bluetooth/main.conf)" ]; then
+        systemctl try-restart bluetooth.service 2>/dev/null || true
+        info "  BlueZ: Experimental + FastConnectable enabled (BT battery reporting)"
+    fi
+fi
 
 # resolved only answers if resolv.conf points at its stub.
 if [ "$(readlink -f /etc/resolv.conf 2>/dev/null)" != "/run/systemd/resolve/stub-resolv.conf" ]; then
@@ -306,8 +368,13 @@ step "Kernel modules, udev, sysctl"
 modprobe uinput 2>/dev/null && info "  uinput loaded" || warn "  uinput already loaded or unavailable"
 
 udevadm control --reload-rules
-udevadm trigger
-info "  udev rules reloaded"
+# Trigger only the subsystems our rules touch. A blanket trigger re-fires DRM
+# device events while a live session holds the GPU — part of the session-kick
+# incident (see the logind comment above).
+udevadm trigger --action=add \
+    --subsystem-match=input --subsystem-match=hidraw \
+    --subsystem-match=backlight --subsystem-match=usb --subsystem-match=misc
+info "  udev rules reloaded (input/hidraw/backlight/usb/misc re-triggered)"
 
 sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
 
@@ -342,6 +409,7 @@ echo "  REBOOT to apply:"
 echo "    - Early module loading (mkinitcpio change)"
 echo "    - Group membership changes for $GAMING_USER"
 echo "    - Network stack handoff (iwd / networkd / resolved)"
+echo "    - Power-button behavior (tap = suspend, hold = poweroff)"
 echo ""
 echo "  After rebooting:"
 echo "    1. Select 'Steam' or 'Desktop' from SDDM"

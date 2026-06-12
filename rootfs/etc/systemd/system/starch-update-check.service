@@ -1,0 +1,8 @@
+[Unit]
+Description=starch: probe for pending updates (feeds Steam's update UI)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/starch/update-check

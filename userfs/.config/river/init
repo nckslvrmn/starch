@@ -42,6 +42,7 @@ riverctl map normal Super Q       close
 riverctl map normal Super Space   spawn fuzzel
 riverctl map normal Super Return  spawn "$TERMINAL"
 riverctl map normal Super B       spawn 'starch-osd battery'
+riverctl map normal Super A       spawn 'starch-osd sink-cycle'
 riverctl map normal Super+Shift E exit
 
 # Region screenshot straight to the clipboard.
@@ -77,10 +78,15 @@ command -v mako >/dev/null 2>&1 && mako &
 
 # Lock after 10 idle minutes and before suspend (lid close → logind suspend;
 # NVreg_PreserveVideoMemoryAllocations + the nvidia units make that safe).
+# The timeout goes through starch-lock-if-idle: Brave/Chromium can't inhibit
+# idle on wlroots, so playing audio (movie, music) defers the lock instead.
+# before-sleep locks unconditionally (no audio gate) but must not stack a
+# second instance over an existing lock; -e ignores empty-password submits so
+# waking the screen with Enter can't feed pam_faillock.
 if command -v swayidle >/dev/null 2>&1 && command -v swaylock >/dev/null 2>&1; then
     swayidle -w \
-        timeout 600 'swaylock -f -c 000000' \
-        before-sleep 'swaylock -f -c 000000' &
+        timeout 600 'starch-lock-if-idle' \
+        before-sleep 'pgrep -x swaylock || swaylock -f -e -c 000000' &
 fi
 
 "$TERMINAL" &

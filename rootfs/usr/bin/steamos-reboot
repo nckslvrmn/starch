@@ -1,0 +1,9 @@
+#!/bin/bash
+# Steam calls this after an OS update to apply it. Same container constraints
+# as steamos-session-select (nosuid, PID-namespaced): write a request file and
+# let the root-side starch-session-handoff unit run the actual reboot.
+set -u
+DIR="${XDG_STATE_HOME:-$HOME/.local/state}/starch"
+mkdir -p "$DIR"
+printf 'reboot\n' > "$DIR/session-request"
+exit 0

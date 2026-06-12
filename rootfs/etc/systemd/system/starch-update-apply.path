@@ -1,0 +1,10 @@
+# Fired when Steam's containerized steamos-update writes an apply request.
+[Unit]
+Description=Watch for starch update-apply requests (Steam update UI)
+
+[Path]
+PathChanged=@@GAMING_HOME@@/.local/state/starch/update-request
+Unit=starch-update-apply.service
+
+[Install]
+WantedBy=multi-user.target

@@ -47,19 +47,29 @@ Key bindings (Desktop):
 | `Super+Z` | zoom (bump to top of stack) |
 | `Super+←/→/↑` | snap left / right / full (riversnap) |
 | `Super+Shift+S` | region screenshot → clipboard |
+| `Super+A` | cycle audio output (OSD) |
 | `Super+B` | battery OSD |
 | `Super+Shift+E` | exit to SDDM |
 
 Switching the other way: launch **"Switch to Steam"** from fuzzel (or run `starch-session-request steam`) to leave the desktop and go straight into the gamescope session. `starch-session-request desktop` works from a TTY/SSH too.
 
+Console mode: `starch-select-boot steam` makes every boot go straight into the Steam session (no keyboard needed); `starch-select-boot greeter` restores the login screen. The power button taps to suspend, holds to power off.
+
 SDDM (Wayland) handles the DRM master handoff and starts PipeWire / D-Bus / `XDG_RUNTIME_DIR` through the systemd user session, so the session scripts don't have to.
 
 ## Performance
 
-- **Session-scoped perf mode.** `start-steam` flips `starch-perf-mode on` (and `off` on exit): on AC it pins the performance governor, intel_pstate EPP, and ACPI platform profile, plus NVIDIA persistence; on battery it biases (balanced profile, EPP) without pinning the governor. Optional: set `STARCH_SCX_SCHED=scx_lavd` in `/etc/starch/profile.conf` (with the `scx-scheds` package) to run a sched-ext scheduler during sessions.
+- **Session-scoped perf mode.** `start-steam` flips `starch-perf-mode on` (and `off` on exit): on AC it pins the performance governor, intel_pstate EPP, and ACPI platform profile, plus NVIDIA persistence; on battery it biases (balanced profile, EPP) without pinning the governor. It also starts the `scx_lavd` sched-ext scheduler for the session (configurable/disable via `STARCH_SCX_SCHED` in `/etc/starch/profile.conf`).
+- **gamescope tuning knobs** live in `/etc/starch/profile.conf`: SDR→HDR inverse tone mapping, SDR nits, FSR/NIS upscaling + sharpness, and a free-form extra-args escape hatch. All off by default.
 - **zram + oomd.** Compressed swap (`zram-generator`, half of RAM, zstd) plus `systemd-oomd`, so a leaking game or Proton shader compile gets killed instead of hard-freezing the box.
 - **Realtime gamescope.** `--rt` and `nice -20` need `CAP_SYS_NICE`; install.sh grants it and a pacman hook reapplies it after every gamescope upgrade.
 - **MangoHud** ships with a default config (`Shift_R+F12` toggles the HUD, `Shift_L+F1` cycles FPS caps). Per-game on the desktop: `MANGOHUD=1 %command%`.
+
+## Updates
+
+`starch-update` runs the full upgrade (`paru -Syu`) and tells you loudly if the kernel or NVIDIA driver changed (reboot before gaming); `starch-update --check` lists what's pending. A pacman hook prints the same warning on any update path.
+
+Optional: set `STARCH_STEAM_UPDATES=1` in `/etc/starch/profile.conf` and Steam's gamepad UI can check for and apply OS updates itself (Settings → System). A root-side timer feeds the "update available" state and a path unit runs the actual `pacman -Syu` — Steam's container can't touch pacman directly. Prototype: the in-Steam progress display may need iteration.
 
 ## Network
 
@@ -88,7 +98,7 @@ If you'd rather have one selectable sink per physical jack, run `starch-audio-se
 
 ## Design notes
 
-- **gamescope owns the display directly.** Direct KMS scanout, no intermediate compositor, lower latency, real HDR on the Mini-LED panel.
+- **gamescope owns the display directly.** Direct KMS scanout, no intermediate compositor, lower latency, real HDR (the internal panel is a DisplayHDR-400-class IPS — EDID reports ~500 nits max — and HDR externals work too).
 - **GPU modules in initramfs** (via `mkinitcpio.conf.d`) so DRM devices exist before SDDM starts.
 - **NVIDIA suspend safety.** `NVreg_PreserveVideoMemoryAllocations=1` plus the `nvidia-suspend`/`nvidia-resume` units so VRAM doesn't corrupt across sleep.
 - **Nothing lives in package-owned paths.** Sessions go in `/usr/local/share/wayland-sessions` and SDDM only looks there, so a river package update can't clobber anything and you won't see a stray upstream River entry.

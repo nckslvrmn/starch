@@ -54,6 +54,28 @@ show_volume() {
     fi
 }
 
+# Cycle the default sink through everything PipeWire offers and toast the
+# friendly name. One keystroke beats digging through Steam/pavucontrol, and it
+# re-picks after the follow-HDMI automation has been overridden.
+sink_cycle() {
+    local cur next_line
+    cur=$(pactl get-default-sink 2>/dev/null)
+    local -a sinks=()
+    mapfile -t sinks < <(pactl -f json list sinks 2>/dev/null \
+        | jq -r '.[] | "\(.name)\t\(.description)"')
+    if [ "${#sinks[@]}" -eq 0 ]; then
+        notify audio "Audio output" "No sinks found"
+        return 1
+    fi
+    local i cur_i=-1
+    for i in "${!sinks[@]}"; do
+        [[ "${sinks[$i]}" == "$cur"$'\t'* ]] && cur_i=$i
+    done
+    next_line="${sinks[$(( (cur_i + 1) % ${#sinks[@]} ))]}"
+    pactl set-default-sink "${next_line%%$'\t'*}" 2>/dev/null
+    notify audio "Audio output" "${next_line#*$'\t'}"
+}
+
 show_battery() {
     local dev info cap state secs time body=""
     dev=$(upower -e 2>/dev/null | grep -m1 -i 'battery_BAT')
@@ -108,8 +130,11 @@ case "${1:-}" in
     battery)
         show_battery
         ;;
+    sink-cycle)
+        sink_cycle
+        ;;
     *)
-        echo "usage: starch-osd {vol-up|vol-down|mute|bright-up|bright-down|battery}" >&2
+        echo "usage: starch-osd {vol-up|vol-down|mute|bright-up|bright-down|battery|sink-cycle}" >&2
         exit 1
         ;;
 esac

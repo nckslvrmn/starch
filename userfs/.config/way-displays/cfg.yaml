@@ -16,4 +16,9 @@ AUTO_SCALE: FALSE
 MAX_PREFERRED_REFRESH: FALSE
 
 DISABLED: []
+
+# Explicit VRR intent: empty list = adaptive sync allowed on every output.
+# Pinned here so a way-displays default change can't silently flip it.
+VRR_OFF: []
+
 LOG_THRESHOLD: INFO

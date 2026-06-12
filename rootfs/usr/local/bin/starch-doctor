@@ -153,7 +153,7 @@ fi
 
 section "Required binaries"
 
-for bin in gamescope steam cage wpctl modetest udevadm sddm wlr-randr; do
+for bin in gamescope steam cage wpctl modetest udevadm sddm wlr-randr checkupdates fwupdmgr; do
     if command -v "$bin" >/dev/null 2>&1; then check "$bin"  pass
     else check "$bin" warn "not in PATH"
     fi
@@ -260,6 +260,24 @@ if [ -e /etc/sddm.conf.d/zz-starch-autologin.conf ]; then
 else
     check "no stale one-shot autologin conf" pass
 fi
+
+section "Updates & maintenance"
+
+if systemctl is-enabled starch-update-apply.path &>/dev/null; then
+    check "starch-update-apply.path enabled (Steam update UI)" pass
+else
+    check "starch-update-apply.path enabled (Steam update UI)" warn "re-run install.sh"
+fi
+if systemctl is-enabled starch-update-check.timer &>/dev/null; then
+    check "starch-update-check.timer enabled" pass
+else
+    check "starch-update-check.timer enabled" warn "re-run install.sh"
+fi
+for tmr in fstrim.timer paccache.timer; do
+    if systemctl is-enabled "$tmr" &>/dev/null; then check "$tmr enabled" pass
+    else check "$tmr enabled" warn "re-run install.sh"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 printf '\nSummary: %s pass, %s warn, %s fail\n' "$(green "$PASS")" "$(yellow "$WARN")" "$(red "$FAIL")"

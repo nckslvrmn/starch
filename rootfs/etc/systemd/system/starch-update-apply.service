@@ -1,0 +1,6 @@
+[Unit]
+Description=starch: apply system updates requested from Steam's update UI
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/starch/update-apply

@@ -1,0 +1,4 @@
+#!/bin/bash
+# Some Steam builds invoke the polkit-helper path instead.
+set -eu
+exec /usr/bin/steamos-reboot

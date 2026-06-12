@@ -1,0 +1,63 @@
+#!/bin/bash
+# Root-side update runner, fired by starch-update-apply.path when the
+# containerized steamos-update writes an apply request. Streams progress as
+# "NN%" lines into a file the container side tails (the only channel that
+# crosses Steam's PID-namespaced, nosuid container is the filesystem).
+set -uo pipefail
+
+STATE_DIR="@@GAMING_HOME@@/.local/state/starch"
+REQ="$STATE_DIR/update-request"
+AVAIL="$STATE_DIR/updates-available"
+PROG="$STATE_DIR/update-progress"
+LOGF="$STATE_DIR/update.log"
+
+[ -e "$REQ" ] || exit 0
+if [ -L "$REQ" ] || [ ! -f "$REQ" ] \
+   || [ "$(stat -c %U "$REQ" 2>/dev/null)" != "@@GAMING_USER@@" ]; then
+    rm -f "$REQ"
+    exit 1
+fi
+rm -f "$REQ"
+
+enabled=0
+[ -r /etc/starch/profile.conf ] && \
+    enabled=$(. /etc/starch/profile.conf 2>/dev/null; echo "${STARCH_STEAM_UPDATES:-0}")
+if [ "$enabled" != "1" ]; then
+    echo "starch-update-apply: STARCH_STEAM_UPDATES is off — ignoring request"
+    exit 0
+fi
+
+total=1
+[ -r "$AVAIL" ] && total=$(wc -l < "$AVAIL")
+[ "$total" -ge 1 ] || total=1
+
+: > "$PROG"
+: > "$LOGF"
+chown "@@GAMING_USER@@:" "$PROG" "$LOGF" 2>/dev/null || true
+
+echo "starch-update-apply: applying $total update(s)"
+echo "0%" >> "$PROG"
+
+n=0
+pacman -Syu --noconfirm 2>&1 | while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$LOGF"
+    case "$line" in
+        upgrading\ *|installing\ *|reinstalling\ *|downgrading\ *)
+            n=$((n + 1))
+            pct=$(( n * 100 / total ))
+            [ "$pct" -gt 99 ] && pct=99
+            echo "${pct}%" >> "$PROG"
+            ;;
+    esac
+done
+rc=${PIPESTATUS[0]}
+
+if [ "$rc" -eq 0 ]; then
+    echo "100%" >> "$PROG"
+fi
+echo "DONE $rc" >> "$PROG"
+echo "starch-update-apply: finished rc=$rc (log: $LOGF)"
+
+# Refresh the pending-updates file so Steam's next check is accurate.
+/usr/local/lib/starch/update-check || true
+exit "$rc"

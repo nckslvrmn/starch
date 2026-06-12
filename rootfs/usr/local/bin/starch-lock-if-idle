@@ -1,0 +1,24 @@
+#!/bin/bash
+# Audio-aware idle lock, run by swayidle's timeout. Chromium/Brave can't use
+# the wlroots idle-inhibit protocol, so a plain swaylock timeout fires mid-
+# movie. Gate on PipeWire instead: any running audio output stream (game,
+# video, music) counts as activity; silence for the full timeout locks.
+set -u
+
+# Never stack a second locker on top of a running one — two instances fight
+# over keyboard input and every password reads as wrong.
+pgrep -x swaylock >/dev/null 2>&1 && exit 0
+
+if pw-dump 2>/dev/null | jq -e '
+        [ .[]
+          | select(.type == "PipeWire:Interface:Node")
+          | select(.info.state == "running")
+          | select(.info.props["media.class"] == "Stream/Output/Audio")
+        ] | length > 0' >/dev/null 2>&1; then
+    exit 0
+fi
+
+# -e: don't submit empty passwords. Without it, tapping Enter to wake the
+# screen counts as a failed login — three of those and pam_faillock locks the
+# account for 10 minutes (every attempt then reads "wrong", even correct ones).
+exec swaylock -f -e -c 000000

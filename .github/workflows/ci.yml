@@ -23,6 +23,23 @@ jobs:
             echo "OK: $f"
           done
 
+      - name: shfmt parse (single Go binary; stricter parser than bash -n)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shfmt
+          set -e
+          for f in install.sh \
+                   rootfs/usr/local/bin/* \
+                   rootfs/usr/local/bin/steamos-polkit-helpers/* \
+                   rootfs/usr/bin/* \
+                   rootfs/usr/local/lib/starch/* \
+                   userfs/.config/river/init; do
+            [ -f "$f" ] || continue
+            head -1 "$f" | grep -q '^#!.*\(bash\|sh\)\|^# shellcheck shell=' || continue
+            shfmt -ln bash "$f" >/dev/null
+            echo "OK: $f"
+          done
+
       - name: validate session desktop files
         run: |
           sudo apt-get update -qq

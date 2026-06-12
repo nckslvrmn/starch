@@ -1,0 +1,10 @@
+[Unit]
+Description=starch: periodic update probe for Steam's update UI
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
