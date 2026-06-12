@@ -203,7 +203,9 @@ _existing() {
     return 0
 }
 V_REFRESH=$(_existing STARCH_REFRESH_FALLBACK)
-V_SCX=$(_existing STARCH_SCX_SCHED); V_SCX="${V_SCX:-scx_lavd}"
+# Strictly opt-in, never defaulted: scx_lavd as default measured a ~30% FPS
+# loss in CPU-bound UE5 (Satisfactory, 90→55) on this hybrid Intel CPU.
+V_SCX=$(_existing STARCH_SCX_SCHED)
 V_STEAM_UPD=$(_existing STARCH_STEAM_UPDATES); V_STEAM_UPD="${V_STEAM_UPD:-0}"
 V_ITM=$(_existing STARCH_HDR_ITM); V_ITM="${V_ITM:-0}"
 V_SDR_NITS=$(_existing STARCH_HDR_SDR_NITS)
@@ -216,8 +218,10 @@ cat > /etc/starch/profile.conf <<EOF
 # panel's native rate so a tooling regression doesn't silently drop to 60Hz.
 STARCH_REFRESH_FALLBACK=${V_REFRESH}
 
-# sched-ext scheduler run by starch-perf-mode during Steam sessions
-# (scx-scheds package). Default scx_lavd; empty disables.
+# Optional sched-ext scheduler run by starch-perf-mode during Steam sessions
+# (e.g. scx_lavd from scx-scheds). Empty = off, the default: scx_lavd measured
+# a ~30% FPS loss in CPU-bound UE5 (Satisfactory) on this CPU. Live A/B test:
+# 'systemctl stop starch-scx' mid-game reverts to EEVDF instantly.
 STARCH_SCX_SCHED=${V_SCX}
 
 # 1 = let Steam's gamepad UI check for and apply OS updates (pacman -Syu via

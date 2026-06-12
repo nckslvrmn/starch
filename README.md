@@ -59,7 +59,7 @@ SDDM (Wayland) handles the DRM master handoff and starts PipeWire / D-Bus / `XDG
 
 ## Performance
 
-- **Session-scoped perf mode.** `start-steam` flips `starch-perf-mode on` (and `off` on exit): on AC it pins the performance governor, intel_pstate EPP, and ACPI platform profile, plus NVIDIA persistence; on battery it biases (balanced profile, EPP) without pinning the governor. It also starts the `scx_lavd` sched-ext scheduler for the session (configurable/disable via `STARCH_SCX_SCHED` in `/etc/starch/profile.conf`).
+- **Session-scoped perf mode.** `start-steam` flips `starch-perf-mode on` (and `off` on exit): on AC it pins the performance governor, intel_pstate EPP, and ACPI platform profile, plus NVIDIA persistence; on battery it biases (balanced profile, EPP) without pinning the governor. A sched-ext scheduler can optionally run for the session (`STARCH_SCX_SCHED` in `/etc/starch/profile.conf`) — off by default after scx_lavd measured ~30% FPS loss in CPU-bound UE5 here.
 - **gamescope tuning knobs** live in `/etc/starch/profile.conf`: SDR→HDR inverse tone mapping, SDR nits, FSR/NIS upscaling + sharpness, and a free-form extra-args escape hatch. All off by default.
 - **zram + oomd.** Compressed swap (`zram-generator`, half of RAM, zstd) plus `systemd-oomd`, so a leaking game or Proton shader compile gets killed instead of hard-freezing the box.
 - **Realtime gamescope.** `--rt` and `nice -20` need `CAP_SYS_NICE`; install.sh grants it and a pacman hook reapplies it after every gamescope upgrade.
