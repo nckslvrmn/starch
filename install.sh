@@ -393,6 +393,33 @@ if command -v alsactl >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+step "Virtual-sink leftovers (native WirePlumber is the default path)"
+
+# The drop-in keeps creating loopback sinks after its service is disabled. With
+# the watcher off, nothing links them to hardware and they are silent.
+GAMING_HOME=$(getent passwd "$GAMING_USER" | cut -d: -f6)
+STALE_PW_CONF="$GAMING_HOME/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf"
+
+if sudo -u "$GAMING_USER" -H systemctl --user is-enabled \
+        starch-audio-port-watcher.service &>/dev/null; then
+    info "  Virtual-sink mode is enabled — leaving its config in place."
+elif [ -e "$STALE_PW_CONF" ]; then
+    sudo -u "$GAMING_USER" -H /usr/local/bin/starch-audio-setup --off >/dev/null 2>&1 \
+        && info "  Removed stale virtual-sink config (was creating silent sinks)" \
+        || warn "  Failed to remove $STALE_PW_CONF — remove it by hand"
+else
+    info "  None found."
+fi
+
+# These shadow /etc/systemd/user, making future updates here a no-op.
+for stale in "$GAMING_HOME/.config/systemd/user/starch-audio-port-watcher.service" \
+             "$GAMING_HOME/.local/bin/starch-audio-port-watcher"; do
+    if [ -e "$stale" ]; then
+        rm -f "$stale" && info "  Removed shadowing copy: $stale"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 if [ "$PACKAGES_NEWLY_INSTALLED" = "true" ] || [ "$NEED_INITRAMFS" = "1" ]; then
     step "Rebuilding initramfs"
     info "  Running mkinitcpio -P (this will take a moment)..."

@@ -15,9 +15,11 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 INCLUDE_PHANTOM=0
-if [ "${1:-}" = "--include-unavailable" ]; then
-    INCLUDE_PHANTOM=1
-fi
+TEARDOWN=0
+case "${1:-}" in
+    --include-unavailable) INCLUDE_PHANTOM=1 ;;
+    --off|--teardown)      TEARDOWN=1 ;;
+esac
 
 PW_CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d"
 STARCH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starch"
@@ -25,7 +27,30 @@ STARCH_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/starch"
 PW_CONF="$PW_CONF_DIR/10-starch-virtual-sinks.conf"
 META="$STARCH_DIR/audio-sinks.conf"
 
+# Disabling the unit isn't enough: the drop-in outlives it and keeps spawning
+# unlinked (silent) sinks every boot.
+teardown() {
+    local removed=0
+    systemctl --user disable --now starch-audio-port-watcher.service >/dev/null 2>&1 || true
+    if [ -e "$PW_CONF" ]; then rm -f "$PW_CONF" && removed=1; fi
+    rm -f "$META"
+    # Old $HOME layout; a unit here shadows the one in /etc/systemd/user.
+    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/starch-audio-port-watcher.service"
+    rm -f "$HOME/.local/bin/starch-audio-port-watcher"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    if [ "$removed" = "1" ]; then
+        systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || true
+        green "Removed virtual-sink config → restarted pipewire/wireplumber."
+    fi
+    green "Virtual-sink mode off; native WirePlumber (50-starch.conf) is in charge."
+}
+
 mkdir -p "$PW_CONF_DIR" "$STARCH_DIR"
+
+if [ "$TEARDOWN" = "1" ]; then
+    teardown
+    exit 0
+fi
 
 if ! command -v pactl >/dev/null 2>&1; then
     err "pactl not found. Install pipewire-pulse / pulseaudio-utils."
@@ -142,8 +167,11 @@ PREV_HASH=""
             }
             playback.props = {
                 node.name          = "$node_name.playback"
-                node.autoconnect   = false
-                node.dont-reconnect = true
+                # Named target re-links after a pipewire restart (pw-link alone
+                # doesn't) without autoconnect cross-linking the virtual sinks.
+                target.object      = "$sink"
+                node.autoconnect   = true
+                node.dont-reconnect = false
                 audio.position     = [ FL FR ]
             }
         }
@@ -181,13 +209,26 @@ for _ in $(seq 1 10); do
     if pactl list short sinks | grep -q starch-out-; then break; fi
     sleep 0.3
 done
-# Link loopbacks explicitly, else WirePlumber cross-links virtual sinks to each
-# other when several are in the graph.
+# Fallback for a pipewire that ignored target.object. Verified, because an
+# unreported failure here yields a selectable but silent sink.
+UNLINKED=""
 while IFS=$'\t' read -r card port type avail desc profile sink; do
     slug=$(slug "$desc")
-    pw-link "starch-out-$slug.playback:output_FL" "$sink:playback_FL" 2>/dev/null || true
-    pw-link "starch-out-$slug.playback:output_FR" "$sink:playback_FR" 2>/dev/null || true
+    node="starch-out-$slug.playback"
+    for ch in FL FR; do
+        pw-link -l 2>/dev/null | grep -q "$node:output_$ch" && continue
+        pw-link "$node:output_$ch" "$sink:playback_$ch" 2>/dev/null || true
+    done
+    if ! pw-link -l 2>/dev/null | grep -q "$node:output_FL"; then
+        UNLINKED="$UNLINKED  • $desc → $sink\n"
+    fi
 done < "$SELECTED_FILE"
+
+if [ -n "$UNLINKED" ]; then
+    warn "These virtual sinks are NOT linked to hardware and will be silent:"
+    printf '%b' "$UNLINKED"
+    warn "Re-run starch-audio-setup, or 'starch-audio-setup --off' to go native."
+fi
 
 green "Wrote $PW_CONF"
 green "Wrote $META"

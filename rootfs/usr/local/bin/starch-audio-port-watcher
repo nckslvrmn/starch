@@ -13,15 +13,30 @@ fi
 
 log() { printf '[starch-audio] %s\n' "$*"; }
 
-# Force loopback links explicitly — WirePlumber's auto-routing cross-links
-# virtual sinks to each other when several are in the graph.
+# Backstop for target.object; idempotent, safe to call per event. The wait loop
+# matters: at startup the loopback ports may not exist yet, and the old
+# one-shot version silently linked nothing.
 ensure_links() {
-    local node card profile port target
+    local node card profile port target ch linked
     while IFS=$'\t' read -r node card profile port target; do
         case "$node" in ''|\#*) continue ;; esac
         pactl list short sinks | awk '{print $2}' | grep -qx "$target" || continue
-        pw-link "$node.playback:output_FL" "$target:playback_FL" 2>/dev/null || true
-        pw-link "$node.playback:output_FR" "$target:playback_FR" 2>/dev/null || true
+
+        for _ in $(seq 1 20); do
+            pw-link -o 2>/dev/null | grep -q "^$node\.playback:output_FL$" && break
+            sleep 0.25
+        done
+
+        for ch in FL FR; do
+            pw-link -l 2>/dev/null | grep -q "$node\.playback:output_$ch" && continue
+            pw-link "$node.playback:output_$ch" "$target:playback_$ch" 2>/dev/null || true
+        done
+
+        if pw-link -l 2>/dev/null | grep -q "$node\.playback:output_FL"; then
+            linked=1
+        else
+            log "warn: $node is NOT linked to $target — it will be silent"
+        fi
     done < "$META"
 }
 
@@ -64,6 +79,8 @@ pactl subscribe 2>/dev/null | while read -r line; do
             new=$(pactl get-default-sink 2>/dev/null || true)
             if [ -n "$new" ] && [ "$new" != "$current" ]; then
                 current="$new"
+                # A pipewire restart drops links; re-assert before switching.
+                ensure_links
                 apply_for_sink "$new"
             fi
             ;;
