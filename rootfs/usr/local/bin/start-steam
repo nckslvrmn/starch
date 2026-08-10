@@ -25,10 +25,12 @@ export XDG_RUNTIME_DIR
 
 starch_ensure_audio steam-session
 
-# Session-scoped perf preset; STARCH_SESSION_PRE_END restores it in the EXIT trap.
-sudo -n /usr/local/bin/starch-perf-mode on >/dev/null 2>&1 || \
-    echo "[steam-session] WARNING: starch-perf-mode on failed (check sudoers drop-in)"
-STARCH_SESSION_PRE_END='sudo -n /usr/local/bin/starch-perf-mode off >/dev/null 2>&1 || true'
+# Session-scoped perf preset. Going through the user unit rather than calling
+# the script directly means systemd restores it at session teardown even if
+# this script never reaches its EXIT trap.
+systemctl --user start starch-perf-mode.service >/dev/null 2>&1 || \
+    echo "[steam-session] WARNING: starch-perf-mode.service failed (check sudoers drop-in)"
+STARCH_SESSION_PRE_END='systemctl --user stop starch-perf-mode.service >/dev/null 2>&1 || true'
 
 # --rt needs gamescope to hold CAP_SYS_NICE (granted by install.sh + a pacman
 # hook), else it drops to normal priority. --hdr-enabled drives HDR on the

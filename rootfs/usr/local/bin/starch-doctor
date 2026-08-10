@@ -38,6 +38,48 @@ else
     check "nvidia_drm.modeset=1 in cmdline" fail "add to bootloader, or NVIDIA suspend/Wayland will break"
 fi
 
+ucode_pkg=""
+case "$(awk -F': ' '/^vendor_id/{print $2; exit}' /proc/cpuinfo)" in
+    GenuineIntel) ucode_pkg=intel-ucode ;;
+    AuthenticAMD) ucode_pkg=amd-ucode ;;
+esac
+if [ -n "$ucode_pkg" ]; then
+    if ! pacman -Q "$ucode_pkg" &>/dev/null; then
+        check "CPU microcode" fail "$ucode_pkg not installed"
+    elif [ ! -e "/boot/$ucode_pkg.img" ]; then
+        check "CPU microcode" fail "/boot/$ucode_pkg.img missing"
+    elif grep -qs "$ucode_pkg" /proc/cmdline || \
+         grep -rqs "$ucode_pkg" /boot/loader/entries/ /boot/grub/grub.cfg 2>/dev/null; then
+        check "CPU microcode" pass "$(awk -F': ' '/^microcode/{print "revision "$2; exit}' /proc/cpuinfo)"
+    else
+        # The image exists but nothing loads it, so the CPU runs BIOS microcode.
+        check "CPU microcode" fail \
+            "/boot/$ucode_pkg.img not referenced by any boot entry — add 'initrd /$ucode_pkg.img' BEFORE the main initramfs"
+    fi
+    grep -qs Vulnerable /sys/devices/system/cpu/vulnerabilities/old_microcode 2>/dev/null && \
+        check "microcode up to date" warn "kernel reports old_microcode: Vulnerable"
+fi
+
+# Turbo reads as enabled while scaling_max_freq still carries the old base-clock
+# ceiling, which pins every core to base under load. Check the effective limit.
+if [ -r /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq ]; then
+    hw=$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq)
+    pol=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || echo 0)
+    if [ "$pol" -ge "$hw" ] 2>/dev/null; then
+        check "CPU max frequency" pass "$((hw / 1000)) MHz"
+    else
+        check "CPU max frequency" warn \
+            "capped at $((pol / 1000)) MHz of $((hw / 1000)) MHz available"
+    fi
+fi
+if [ -r /sys/devices/system/cpu/intel_pstate/no_turbo ]; then
+    if [ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo)" = "0" ]; then
+        check "Intel Turbo Boost" pass
+    else
+        check "Intel Turbo Boost" warn "disabled (no_turbo=1) — CPU limited to base clock"
+    fi
+fi
+
 for m in nvidia nvidia_modeset nvidia_drm; do
     if [ -d "/sys/module/$m" ]; then check "module $m loaded" pass
     else check "module $m loaded" fail "modprobe $m failing — check dmesg | grep nvidia"

@@ -62,6 +62,31 @@ apply_epp() {
     done
 }
 
+# Clearing no_turbo raises cpuinfo_max_freq but leaves scaling_max_freq at the
+# old base-clock ceiling, so the governor still stops there. Both have to move
+# or turbo reads as enabled while the CPU stays pinned to base.
+apply_turbo() {
+    local on="${1:-1}" f
+    if [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ]; then
+        echo "$(( 1 - on ))" > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
+    elif [ -w /sys/devices/system/cpu/cpufreq/boost ]; then
+        echo "$on" > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true
+    fi
+    for f in /sys/devices/system/cpu/cpu*/cpufreq; do
+        [ -w "$f/scaling_max_freq" ] && [ -r "$f/cpuinfo_max_freq" ] || continue
+        cat "$f/cpuinfo_max_freq" > "$f/scaling_max_freq" 2>/dev/null || true
+    done
+}
+
+read_turbo() {
+    local v
+    if read -r v < /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null; then
+        printf '%s\n' "$(( 1 - v ))"
+    elif read -r v < /sys/devices/system/cpu/cpufreq/boost 2>/dev/null; then
+        printf '%s\n' "$v"
+    fi
+}
+
 pick_platform_profile() {
     local choices="" c
     read -r choices < "${PP}_choices" 2>/dev/null || return 1
@@ -81,10 +106,12 @@ on)
     e=/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference
     [ -r "$e" ] && printf 'EPP=%s\n' "$(cat "$e")" >> "$STATE_FILE"
     [ -r "$PP" ] && printf 'PP=%s\n' "$(cat "$PP")" >> "$STATE_FILE"
+    t=$(read_turbo); [ -n "$t" ] && printf 'TURBO=%s\n' "$t" >> "$STATE_FILE"
 
     if on_ac; then
         apply_governor "$(pick_governor performance || true)"
         apply_epp performance
+        apply_turbo 1
         if [ -w "$PP" ]; then
             t=$(pick_platform_profile performance || true)
             [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null
@@ -114,16 +141,19 @@ on)
     ;;
 
 off)
-    GOV="" EPP_OLD="" PP_OLD=""
+    GOV="" EPP_OLD="" PP_OLD="" TURBO_OLD=""
     if [ -r "$STATE_FILE" ]; then
         while IFS= read -r line; do
             case "$line" in
-                GOV=*) GOV="${line#GOV=}" ;;
-                EPP=*) EPP_OLD="${line#EPP=}" ;;
-                PP=*)  PP_OLD="${line#PP=}" ;;
+                GOV=*)   GOV="${line#GOV=}" ;;
+                EPP=*)   EPP_OLD="${line#EPP=}" ;;
+                PP=*)    PP_OLD="${line#PP=}" ;;
+                TURBO=*) TURBO_OLD="${line#TURBO=}" ;;
             esac
         done < "$STATE_FILE"
     fi
+
+    [ -n "$TURBO_OLD" ] && apply_turbo "$TURBO_OLD"
 
     # Validate the snapshot against the hardware; if it's gone, fall back
     # through whatever this CPU actually offers.

@@ -81,7 +81,7 @@ REPO_PACKAGES=(
     ghostty
     grim
     iwd
-    jack2
+    pipewire-jack
     jq
     lib32-mangohud
     lib32-mesa
@@ -144,6 +144,18 @@ for pkg in "${AUR_PACKAGES[@]}"; do
 done
 
 PACKAGES_NEWLY_INSTALLED=false
+
+# pipewire-jack conflicts with jack2, and --noconfirm answers "no" to the
+# replace prompt, which aborts the whole transaction. Swap it out first.
+if pacman -Q jack2 &>/dev/null && ! pacman -Q pipewire-jack &>/dev/null; then
+    info "Replacing jack2 with pipewire-jack"
+    if ! pacman -Rdd --noconfirm jack2 &>/dev/null \
+       || ! pacman -S --needed --noconfirm pipewire-jack &>/dev/null; then
+        error "Could not replace jack2. Run 'pacman -S pipewire-jack' by hand, then re-run."
+        exit 1
+    fi
+fi
+
 if [ ${#MISSING_REPO[@]} -gt 0 ]; then
     info "Installing ${#MISSING_REPO[@]} repo package(s): ${MISSING_REPO[*]}"
     pacman -S --needed --noconfirm "${MISSING_REPO[@]}"
@@ -383,16 +395,6 @@ info "  udev rules reloaded (input/hidraw/backlight/usb/misc re-triggered)"
 sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
 
 # ---------------------------------------------------------------------------
-step "ALSA mixer sanity (Realtek Line Out fix)"
-
-/usr/local/lib/starch/fix-alsa
-if command -v alsactl >/dev/null 2>&1; then
-    alsactl store >/dev/null 2>&1 \
-        && info "  ALSA mixer levels persisted (Line Out, Auto-Mute, etc.)" \
-        || warn "  alsactl store failed — Line Out may not survive reboot"
-fi
-
-# ---------------------------------------------------------------------------
 step "Removing the old virtual-sink audio mode"
 
 # It modelled each output port as a loopback sink. The loopbacks lost their
@@ -437,6 +439,24 @@ if [ "$AUDIO_REMOVED" = "1" ]; then
     info "  Restarted pipewire/wireplumber"
 else
     info "  Nothing to remove."
+fi
+
+# ---------------------------------------------------------------------------
+step "CPU microcode"
+
+# Package only — wiring it into the boot entry is left to you, since the
+# bootloader config is not starch's to rewrite. starch-doctor verifies it.
+UCODE_PKG=""
+case "$(awk -F': ' '/^vendor_id/{print $2; exit}' /proc/cpuinfo)" in
+    GenuineIntel) UCODE_PKG=intel-ucode ;;
+    AuthenticAMD) UCODE_PKG=amd-ucode ;;
+esac
+
+if [ -n "$UCODE_PKG" ]; then
+    pacman -Q "$UCODE_PKG" &>/dev/null || pacman -S --needed --noconfirm "$UCODE_PKG"
+    info "  $UCODE_PKG installed — run starch-doctor to confirm it's in the boot entry"
+else
+    warn "  Unknown CPU vendor — skipping microcode"
 fi
 
 # ---------------------------------------------------------------------------
