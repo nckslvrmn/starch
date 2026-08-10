@@ -148,8 +148,11 @@ done
 
 # Two IP managers on one interface: NM and networkd overwrite each other's
 # sysctls and race on DHCP.
+# is-enabled alone isn't enough: four sockets can activate it on demand.
 if systemctl is-enabled systemd-networkd.service &>/dev/null; then
     check "systemd-networkd disabled" fail "conflicts with NetworkManager for IP — re-run install.sh"
+elif systemctl is-active systemd-networkd.service &>/dev/null; then
+    check "systemd-networkd disabled" fail "disabled but running — socket-activated; re-run install.sh"
 else
     check "systemd-networkd disabled" pass
 fi

@@ -448,12 +448,20 @@ step "Removing systemd-networkd from the network stack"
 # adopted the devices — three daemons on one interface, which showed up as
 # "Foreign process 'NetworkManager' changed sysctl ... conflicting with our
 # setting" in the networkd journal. NM owns IP now.
+# Disabling the service alone leaves it running: four sockets trigger it, so
+# it comes straight back up.
 NET_CHANGED=0
-if systemctl is-enabled systemd-networkd.service &>/dev/null; then
-    systemctl disable --now systemd-networkd.service systemd-networkd.socket &>/dev/null || true
-    info "  Disabled systemd-networkd"
-    NET_CHANGED=1
-fi
+for unit in systemd-networkd.service systemd-networkd.socket \
+            systemd-networkd-varlink.socket systemd-networkd-varlink-metrics.socket \
+            systemd-networkd-resolve-hook.socket systemd-networkd-wait-online.service \
+            systemd-networkd-persistent-storage.service; do
+    systemctl list-unit-files "$unit" &>/dev/null || continue
+    if systemctl is-enabled "$unit" &>/dev/null || systemctl is-active "$unit" &>/dev/null; then
+        systemctl disable --now "$unit" &>/dev/null || true
+        NET_CHANGED=1
+    fi
+done
+[ "$NET_CHANGED" = "1" ] && info "  Disabled systemd-networkd and its activation sockets"
 for f in /etc/systemd/network/40-wired.network /etc/systemd/network/50-wifi.network; do
     [ -e "$f" ] && rm -f "$f" && info "  Removed $f" && NET_CHANGED=1
 done
