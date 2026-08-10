@@ -1,8 +1,0 @@
-# Managed by starch. systemd-networkd owns wired; iwd owns WiFi (with its own
-# DHCP via EnableNetworkConfiguration). NetworkManager is a passive
-# connectivity monitor only — see NetworkManager/conf.d/starch.conf.
-[Match]
-Name=e*
-
-[Network]
-DHCP=ipv4

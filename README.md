@@ -73,7 +73,9 @@ Optional: set `STARCH_STEAM_UPDATES=1` in `/etc/starch/profile.conf` and Steam's
 
 ## Network
 
-iwd owns WiFi (association + DHCP), systemd-networkd owns wired, systemd-resolved owns DNS. NetworkManager runs only as a passive connectivity monitor because Steam queries it over D-Bus; it manages nothing.
+NetworkManager owns IP configuration on every interface, iwd is the WiFi backend (`iwctl` still works for scanning and diagnostics), systemd-resolved owns DNS.
+
+NM manages everything rather than sitting passive because Steam's gamepadui network panel reads NM over D-Bus — an interface NM doesn't manage is invisible there, so a docked ethernet link would show as "no network" while routing perfectly well. The earlier split (networkd on wired, iwd doing its own DHCP, NM adopting devices anyway) put three daemons on one interface and logged `Foreign process 'NetworkManager' changed sysctl ... conflicting with our setting` on every boot.
 
 ## Primary display
 

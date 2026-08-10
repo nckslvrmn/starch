@@ -31,7 +31,7 @@ Restore `/etc/resolv.conf` for your replacement DNS setup afterwards.
 ## Services
 
 ```bash
-systemctl disable sddm iwd systemd-networkd systemd-resolved systemd-oomd
+systemctl disable sddm iwd systemd-resolved systemd-oomd
 ```
 
 (Keep `NetworkManager` or re-point it at full management by deleting the

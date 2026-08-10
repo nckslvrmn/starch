@@ -140,11 +140,36 @@ fi
 
 section "Network stack"
 
-for svc in iwd.service systemd-networkd.service systemd-resolved.service; do
+for svc in NetworkManager.service iwd.service systemd-resolved.service; do
     if systemctl is-enabled "$svc" &>/dev/null; then check "$svc enabled" pass
     else check "$svc enabled" warn "starch network stack expects this enabled — re-run install.sh"
     fi
 done
+
+# Two IP managers on one interface: NM and networkd overwrite each other's
+# sysctls and race on DHCP.
+if systemctl is-enabled systemd-networkd.service &>/dev/null; then
+    check "systemd-networkd disabled" fail "conflicts with NetworkManager for IP — re-run install.sh"
+else
+    check "systemd-networkd disabled" pass
+fi
+
+if grep -qs "^EnableNetworkConfiguration=true" /etc/iwd/main.conf; then
+    check "iwd not doing IP config" fail "EnableNetworkConfiguration=true duplicates NM's DHCP"
+else
+    check "iwd not doing IP config" pass
+fi
+
+# An interface NM doesn't manage is invisible in Steam's network panel.
+if command -v nmcli >/dev/null 2>&1; then
+    unmanaged=$(nmcli -t -f DEVICE,STATE device status 2>/dev/null \
+        | awk -F: '$2 == "unmanaged" && $1 != "lo" {printf "%s ", $1}')
+    if [ -n "$unmanaged" ]; then
+        check "all interfaces NM-managed" warn "unmanaged: ${unmanaged}— invisible to Steam's network UI"
+    else
+        check "all interfaces NM-managed" pass
+    fi
+fi
 
 section "DRM devices"
 

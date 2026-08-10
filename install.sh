@@ -303,11 +303,11 @@ step "Enabling services"
 
 systemctl daemon-reload
 
-# iwd owns WiFi, networkd wired, resolved DNS; NetworkManager stays as a
-# passive connectivity monitor for Steam's online check. oomd needs the zram
+# NetworkManager owns IP for every interface (Steam's network panel reads it
+# over D-Bus), iwd is the WiFi backend, resolved does DNS. oomd needs the zram
 # swap from zram-generator. nvidia-powerd drives Dynamic Boost; the
 # suspend/resume units preserve VRAM across sleep.
-for svc in sddm NetworkManager iwd systemd-networkd systemd-resolved \
+for svc in sddm NetworkManager iwd systemd-resolved \
            systemd-oomd bluetooth \
            nvidia-suspend nvidia-hibernate nvidia-resume nvidia-powerd; do
     if systemctl list-unit-files --quiet "${svc}.service" 2>/dev/null | grep -q "$svc"; then
@@ -439,6 +439,29 @@ if [ "$AUDIO_REMOVED" = "1" ]; then
     info "  Restarted pipewire/wireplumber"
 else
     info "  Nothing to remove."
+fi
+
+# ---------------------------------------------------------------------------
+step "Removing systemd-networkd from the network stack"
+
+# Older starch had networkd on wired and iwd doing its own DHCP while NM also
+# adopted the devices — three daemons on one interface, which showed up as
+# "Foreign process 'NetworkManager' changed sysctl ... conflicting with our
+# setting" in the networkd journal. NM owns IP now.
+NET_CHANGED=0
+if systemctl is-enabled systemd-networkd.service &>/dev/null; then
+    systemctl disable --now systemd-networkd.service systemd-networkd.socket &>/dev/null || true
+    info "  Disabled systemd-networkd"
+    NET_CHANGED=1
+fi
+for f in /etc/systemd/network/40-wired.network /etc/systemd/network/50-wifi.network; do
+    [ -e "$f" ] && rm -f "$f" && info "  Removed $f" && NET_CHANGED=1
+done
+
+if [ "$NET_CHANGED" = "1" ]; then
+    systemctl restart iwd.service &>/dev/null || true
+    systemctl restart NetworkManager.service &>/dev/null || true
+    info "  Restarted iwd + NetworkManager"
 fi
 
 # ---------------------------------------------------------------------------
