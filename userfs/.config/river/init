@@ -43,6 +43,7 @@ riverctl map normal Super Space   spawn fuzzel
 riverctl map normal Super Return  spawn "$TERMINAL"
 riverctl map normal Super B       spawn 'starch-osd battery'
 riverctl map normal Super A       spawn 'starch-osd sink-cycle'
+riverctl map normal Super+Shift A spawn 'starch-osd sink-auto'
 riverctl map normal Super+Shift E exit
 
 # Region screenshot straight to the clipboard.

@@ -20,9 +20,10 @@ rm -rf /etc/starch /var/lib/starch /usr/share/sddm/themes/starch
 # Per-user files (userfs/ mirrors ~)
 (cd userfs && find . -type f | sed "s|^\.|$HOME|") | xargs -r rm -f
 
-# Opt-in virtual-sink artifacts, if starch-audio-setup was ever run
+# Artifacts of the removed virtual-sink mode, if it was ever run
 rm -f ~/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf \
       ~/.config/starch/audio-sinks.conf
+rm -rf ~/.local/state/wireplumber
 ```
 
 Restore `/etc/resolv.conf` for your replacement DNS setup afterwards.
@@ -31,7 +32,6 @@ Restore `/etc/resolv.conf` for your replacement DNS setup afterwards.
 
 ```bash
 systemctl disable sddm iwd systemd-networkd systemd-resolved systemd-oomd
-systemctl --global disable starch-audio-setup starch-audio-port-watcher 2>/dev/null
 ```
 
 (Keep `NetworkManager` or re-point it at full management by deleting the

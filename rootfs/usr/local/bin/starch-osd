@@ -54,23 +54,16 @@ show_volume() {
     fi
 }
 
-# Cycle the default sink through everything PipeWire offers and toast the
-# friendly name. One keystroke beats digging through Steam/pavucontrol, and it
-# re-picks after the follow-HDMI automation has been overridden.
+# Cycle the default sink and toast its name. Only real devices are listed —
+# PipeWire drops a sink when its device disconnects, and speakers/headphones
+# are ports on one sink that jack detection switches on its own, so there is
+# nothing here to filter and no port for us to set.
 sink_cycle() {
-    local cur next_line
+    local cur next name desc
     cur=$(pactl get-default-sink 2>/dev/null)
     local -a sinks=()
-    local links name desc
-    # Skip loopback sinks with no outgoing link: they reach no hardware, so
-    # cycling onto one looks like a successful selection and is silent.
-    links=$(pw-link -l 2>/dev/null || true)
     while IFS=$'\t' read -r name desc; do
-        [ -z "$name" ] && continue
-        if [ -n "$links" ] && grep -q "^$name\.playback:" <<<"$links"; then
-            grep -q "$name\.playback:output_FL$" <<<"$links" || continue
-        fi
-        sinks+=("$name"$'\t'"$desc")
+        [ -n "$name" ] && sinks+=("$name"$'\t'"$desc")
     done < <(pactl -f json list sinks 2>/dev/null \
         | jq -r '.[] | "\(.name)\t\(.description)"')
     if [ "${#sinks[@]}" -eq 0 ]; then
@@ -81,9 +74,26 @@ sink_cycle() {
     for i in "${!sinks[@]}"; do
         [[ "${sinks[$i]}" == "$cur"$'\t'* ]] && cur_i=$i
     done
-    next_line="${sinks[$(( (cur_i + 1) % ${#sinks[@]} ))]}"
-    pactl set-default-sink "${next_line%%$'\t'*}" 2>/dev/null
-    notify audio "Audio output" "${next_line#*$'\t'}"
+    next="${sinks[$(( (cur_i + 1) % ${#sinks[@]} ))]}"
+    name="${next%%$'\t'*}"
+    pactl set-default-sink "$name" 2>/dev/null
+    # Without this, already-playing apps stay on the old sink until restarted.
+    pactl list short sink-inputs 2>/dev/null | while read -r id _; do
+        pactl move-sink-input "$id" "$name" 2>/dev/null || true
+    done
+    notify audio "Audio output" "${next#*$'\t'}"
+}
+
+# Drop the manual pick so priority rules (follow-HDMI) take over again.
+sink_auto() {
+    wpctl set-default 2>/dev/null
+    local state="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/default-nodes"
+    if [ -w "$state" ]; then
+        systemctl --user stop wireplumber 2>/dev/null
+        sed -i '/^default\.configured\.audio\.sink/d' "$state"
+        systemctl --user start wireplumber 2>/dev/null
+    fi
+    notify audio "Audio output" "Automatic (follows HDMI)"
 }
 
 show_battery() {
@@ -143,8 +153,11 @@ case "${1:-}" in
     sink-cycle)
         sink_cycle
         ;;
+    sink-auto)
+        sink_auto
+        ;;
     *)
-        echo "usage: starch-osd {vol-up|vol-down|mute|bright-up|bright-down|battery|sink-cycle}" >&2
+        echo "usage: starch-osd {vol-up|vol-down|mute|bright-up|bright-down|battery|sink-cycle|sink-auto}" >&2
         exit 1
         ;;
 esac

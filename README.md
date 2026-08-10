@@ -92,9 +92,11 @@ That lives in `~/.config/starch/display.conf` and feeds the gamescope output pri
 Native WirePlumber. Per-device volume sticks across reboots, and HDMI becomes the default sink when you plug in a display. Two caveats, both intentional:
 
 - Bluetooth headphones outrank freshly plugged HDMI while connected.
-- Once you pick a sink manually (in Steam's audio settings or `wpctl`), that preference outranks the automation until you clear it (`wpctl settings --delete default-configured-audio-sink`) or pick again.
+- Once you pick a sink manually (in Steam's audio settings or `wpctl`), that preference outranks the automation until you clear it or pick again.
 
-If you'd rather have one selectable sink per physical jack, run `starch-audio-setup`, it's opt-in.
+Super+A cycles the default sink and moves playing streams onto it; Super+Shift+A drops the manual pick so HDMI-follow takes over again. Speakers and headphones are two ports on one sink, switched by jack detection, so they don't appear as separate entries.
+
+Earlier versions shipped an opt-in `starch-audio-setup` that exposed one sink per physical jack, built from loopbacks. It was removed: the loopbacks lost their links on every PipeWire restart and went silent, and its watcher could pin the card to an empty headphone jack. `install.sh` removes its leftovers, including stale entries in the WirePlumber state that otherwise pin the default to a sink that no longer exists.
 
 ## Design notes
 

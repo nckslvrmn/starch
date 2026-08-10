@@ -393,31 +393,51 @@ if command -v alsactl >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-step "Virtual-sink leftovers (native WirePlumber is the default path)"
+step "Removing the old virtual-sink audio mode"
 
-# The drop-in keeps creating loopback sinks after its service is disabled. With
-# the watcher off, nothing links them to hardware and they are silent.
+# It modelled each output port as a loopback sink. The loopbacks lost their
+# links on every pipewire restart and went silent, and its watcher could pin
+# the card to an empty headphone jack. WirePlumber does all of this natively.
 GAMING_HOME=$(getent passwd "$GAMING_USER" | cut -d: -f6)
-STALE_PW_CONF="$GAMING_HOME/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf"
+AUDIO_REMOVED=0
 
-if sudo -u "$GAMING_USER" -H systemctl --user is-enabled \
-        starch-audio-port-watcher.service &>/dev/null; then
-    info "  Virtual-sink mode is enabled — leaving its config in place."
-elif [ -e "$STALE_PW_CONF" ]; then
-    sudo -u "$GAMING_USER" -H /usr/local/bin/starch-audio-setup --off >/dev/null 2>&1 \
-        && info "  Removed stale virtual-sink config (was creating silent sinks)" \
-        || warn "  Failed to remove $STALE_PW_CONF — remove it by hand"
-else
-    info "  None found."
-fi
+sudo -u "$GAMING_USER" -H systemctl --user disable --now \
+    starch-audio-port-watcher.service starch-audio-setup.service &>/dev/null || true
 
-# These shadow /etc/systemd/user, making future updates here a no-op.
-for stale in "$GAMING_HOME/.config/systemd/user/starch-audio-port-watcher.service" \
-             "$GAMING_HOME/.local/bin/starch-audio-port-watcher"; do
+for stale in \
+    "$GAMING_HOME/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf" \
+    "$GAMING_HOME/.config/starch/audio-sinks.conf" \
+    "$GAMING_HOME/.config/systemd/user/starch-audio-port-watcher.service" \
+    "$GAMING_HOME/.local/bin/starch-audio-port-watcher" \
+    /usr/local/bin/starch-audio-setup \
+    /usr/local/bin/starch-audio-port-watcher \
+    /etc/systemd/user/starch-audio-setup.service \
+    /etc/systemd/user/starch-audio-port-watcher.service
+do
     if [ -e "$stale" ]; then
-        rm -f "$stale" && info "  Removed shadowing copy: $stale"
+        rm -f "$stale" && info "  Removed $stale" && AUDIO_REMOVED=1
     fi
 done
+
+# A configured default naming a deleted virtual sink outranks priority and
+# survives reboots, so audio lands on a sink that no longer exists.
+WP_STATE="$GAMING_HOME/.local/state/wireplumber"
+if grep -rqs "starch-out-" "$WP_STATE"; then
+    sudo -u "$GAMING_USER" -H systemctl --user stop wireplumber &>/dev/null || true
+    sed -i '/starch-out-/d' "$WP_STATE"/default-nodes "$WP_STATE"/default-routes \
+        "$WP_STATE"/stream-properties 2>/dev/null || true
+    info "  Purged stale virtual-sink entries from wireplumber state"
+    AUDIO_REMOVED=1
+fi
+
+if [ "$AUDIO_REMOVED" = "1" ]; then
+    sudo -u "$GAMING_USER" -H systemctl --user daemon-reload &>/dev/null || true
+    sudo -u "$GAMING_USER" -H systemctl --user restart \
+        pipewire pipewire-pulse wireplumber &>/dev/null || true
+    info "  Restarted pipewire/wireplumber"
+else
+    info "  Nothing to remove."
+fi
 
 # ---------------------------------------------------------------------------
 if [ "$PACKAGES_NEWLY_INSTALLED" = "true" ] || [ "$NEED_INITRAMFS" = "1" ]; then
