@@ -3,4 +3,3 @@ Name=Steam
 Comment=Minimal gamescope+Steam session, controller-first
 Exec=/usr/local/bin/start-steam
 Type=Application
-DesktopNames=gamescope

@@ -16,6 +16,9 @@ starch_check_gpu_modules steam-session || exit 1
 starch_wait_for_drm steam-session || exit 1
 starch_apply_gpu_env
 
+# Lives here, not as DesktopNames= in the .desktop file: desktop-file-validate
+# errors on that key and CI runs it.
+export XDG_CURRENT_DESKTOP=gamescope
 export PROTON_ENABLE_NVAPI=1
 export SDL_JOYSTICK_HIDAPI_GAMECUBE=0
 export STEAM_GAMESCOPE_SESSION=1
