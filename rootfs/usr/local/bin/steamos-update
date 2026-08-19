@@ -1,16 +1,16 @@
 #!/bin/bash
-# Steam's gamepadui OS-update hook (originally a stub from
-# shahnawazshahin/steam-using-gamescope-guide — see README attribution).
+# Steam's gamepadui OS-update hook, originally a stub from
+# shahnawazshahin/steam-using-gamescope-guide (see README attribution).
 #
 #   steamos-update check   → exit 0 if updates pending, 7 if none
 #   steamos-update         → apply updates, stream "NN%" progress to stdout
 #
-# Runs INSIDE Steam's PID-namespaced, nosuid client container: no pacman, no
-# sudo, no host process view. Everything is mediated through $HOME files:
-# the starch-update-check.timer (root) maintains updates-available; writing
-# update-request triggers starch-update-apply.path (root) which streams
-# progress back. Gated on STARCH_STEAM_UPDATES=1 in /etc/starch/profile.conf
-# (when off, the root side never writes updates-available → always exit 7).
+# Runs INSIDE Steam's PID-namespaced, nosuid client container, so no pacman, no
+# sudo and no view of host processes. Everything goes through $HOME files: the
+# root-side starch-update-check.timer maintains updates-available, and writing
+# update-request triggers starch-update-apply.path, which streams progress back.
+# Gated on STARCH_STEAM_UPDATES=1 in /etc/starch/profile.conf. When that's off
+# the root side never writes updates-available, so this always exits 7.
 set -u
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/starch"
@@ -21,7 +21,7 @@ MODE=apply
 for arg in "$@"; do
     case "$arg" in
         check|--check) MODE=check ;;
-        --supports-duplicate-detection) ;;  # acknowledged, no special handling
+        --supports-duplicate-detection) ;;  # acknowledged, nothing to do
     esac
 done
 
@@ -33,15 +33,15 @@ if [ "$MODE" = "check" ]; then
     exit 7
 fi
 
-# Apply.
 [ -s "$AVAIL" ] || exit 7
 
 mkdir -p "$STATE_DIR"
 : > "$PROG" 2>/dev/null || true
 printf 'apply\n' > "$STATE_DIR/update-request"
 
-# Tail the progress file the root-side runner writes; mirror lines to stdout
-# (Steam parses percentages). Give up after 2h or if nothing starts in 60s.
+# Tail the progress file the root-side runner writes and mirror the lines to
+# stdout, where Steam parses the percentages. Give up after 2h, or after 60s if
+# nothing starts at all.
 deadline=$(( SECONDS + 7200 ))
 start_deadline=$(( SECONDS + 60 ))
 last=0

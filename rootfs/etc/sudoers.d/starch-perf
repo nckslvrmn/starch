@@ -1,6 +1,5 @@
-# Lets the Steam session flip the perf preset without prompting. Argument
-# lists are pinned exactly; @@GAMING_USER@@ is substituted at install time.
-# Note: session switching deliberately does NOT use sudo — Steam's client
-# container is nosuid, so it goes through the starch-session-handoff path
-# unit instead.
+# Lets the Steam session flip the perf preset without a prompt. Argument lists
+# are pinned exactly, and @@GAMING_USER@@ is substituted at install time.
+# Session switching deliberately doesn't use sudo: Steam's client container is
+# nosuid, so it goes through the starch-session-handoff path unit instead.
 @@GAMING_USER@@ ALL=(root) NOPASSWD: /usr/local/bin/starch-perf-mode on, /usr/local/bin/starch-perf-mode off

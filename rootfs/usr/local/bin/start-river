@@ -3,12 +3,12 @@ set -uo pipefail
 
 . /usr/local/lib/starch/profile.sh
 
-# Logging first, so profile-init failures (no NVIDIA card, etc.) land in the
-# session log instead of wherever SDDM points stderr.
+# Logging first, so profile-init failures (no NVIDIA card and friends) land in
+# the session log instead of wherever SDDM points stderr.
 starch_session_begin river
 
-# One-shot autologin cleanup: if we got here via a session handoff, drop the
-# autologin conf so the next boot shows the greeter again.
+# If we got here via a session handoff, drop the one-shot autologin conf so the
+# next boot shows the greeter again.
 starch-session-request clear 2>/dev/null || true
 
 starch_profile_init river-session || exit 1

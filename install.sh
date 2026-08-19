@@ -1,7 +1,7 @@
 #!/bin/bash
-# starch installer. Declarative where possible:
-#   rootfs/  mirrors /            (system files; @@GAMING_USER@@ is templated)
-#   userfs/  mirrors $GAMING_HOME (per-user config, installed as the user)
+# starch installer. The repo is the manifest:
+#   rootfs/  mirrors /            (@@GAMING_USER@@/@@GAMING_HOME@@ are templated)
+#   userfs/  mirrors $GAMING_HOME (installed as the user)
 # Executable bits in the repo decide install modes; sudoers files get 0440.
 set -euo pipefail
 
@@ -39,15 +39,14 @@ if ! sudo -u "$GAMING_USER" -H bash -c 'command -v paru' &>/dev/null; then
     exit 1
 fi
 
-# steam and the lib32-* stack live in [multilib]; stock Arch ships it disabled.
 if ! pacman -Sl multilib &>/dev/null; then
     error "The [multilib] repository is not enabled in /etc/pacman.conf."
     error "Uncomment the [multilib] section, run 'pacman -Sy', and re-run."
     exit 1
 fi
 
-# Without nvidia_drm.modeset=1, Wayland sessions and NVIDIA suspend silently
-# break. Checked up front so failure costs seconds, not a full package install.
+# Wayland sessions and NVIDIA suspend both break without this. Checked before
+# the packages so failure costs seconds, not a full install.
 if ! grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
     if [ "${STARCH_SKIP_CMDLINE_CHECK:-0}" = "1" ]; then
         warn "/proc/cmdline is missing nvidia_drm.modeset=1 (skipped via STARCH_SKIP_CMDLINE_CHECK=1)"
@@ -60,8 +59,6 @@ if ! grep -Eq 'nvidia[-_]drm\.modeset=1' /proc/cmdline 2>/dev/null; then
 fi
 
 info "Installing starch for user: $GAMING_USER ($GAMING_HOME)"
-# starch targets a single hardware config: Intel + NVIDIA-discrete, BIOS set to
-# "Discrete GPU Only" so the NVIDIA GPU drives both scanout and rendering.
 
 # ---------------------------------------------------------------------------
 step "Installing packages"
@@ -89,7 +86,7 @@ REPO_PACKAGES=(
     lib32-pipewire
     lib32-vulkan-icd-loader
     libdrm                  # modetest (refresh-rate probe)
-    libnewt                 # whiptail (starch-select-display TUI)
+    libnewt                 # whiptail (starch-select-display)
     libnotify
     libpulse
     fwupd
@@ -100,14 +97,14 @@ REPO_PACKAGES=(
     noto-fonts
     noto-fonts-emoji
     nvidia-utils
-    pacman-contrib           # checkupdates (starch-update, Steam update UI)
+    pacman-contrib           # checkupdates (starch-update, Steam's update UI)
     pavucontrol
     pipewire
     pipewire-alsa
     pipewire-pulse
     qt6-svg
     qt6-wayland
-    river                    # 0.4+: compositor only, canoe (AUR) is the WM
+    river                    # compositor only, canoe is the window manager
     scx-scheds               # sched-ext schedulers (STARCH_SCX_SCHED)
     sddm
     slurp
@@ -130,9 +127,9 @@ REPO_PACKAGES=(
 
 AUR_PACKAGES=(
     brave-bin
-    canoe                    # the window manager; river 0.4 ships none
+    canoe                    # the window manager
     way-displays
-    wlrctl                   # Super+Q close (canoe's own close binding is fixed)
+    wlrctl                   # Super+Q close (canoe's own binding can't be remapped)
     xpadneo-dkms
 )
 
@@ -146,31 +143,6 @@ for pkg in "${AUR_PACKAGES[@]}"; do
 done
 
 PACKAGES_NEWLY_INSTALLED=false
-
-# pipewire-jack conflicts with jack2, and --noconfirm answers "no" to the
-# replace prompt, which aborts the whole transaction. Swap it out first.
-if pacman -Q jack2 &>/dev/null && ! pacman -Q pipewire-jack &>/dev/null; then
-    info "Replacing jack2 with pipewire-jack"
-    if ! pacman -Rdd --noconfirm jack2 &>/dev/null \
-       || ! pacman -S --needed --noconfirm pipewire-jack &>/dev/null; then
-        error "Could not replace jack2. Run 'pacman -S pipewire-jack' by hand, then re-run."
-        exit 1
-    fi
-fi
-
-# Same story for river: 0.4 conflicts with river-classic, and canoe (AUR) depends
-# on it, so the old compositor has to go before either can be installed. -Rdd
-# skips the dependency check because nothing else in the set pulls river in.
-if pacman -Q river-classic &>/dev/null && ! pacman -Q river &>/dev/null; then
-    info "Replacing river-classic with river 0.4 (canoe becomes the window manager)"
-    if ! pacman -Rdd --noconfirm river-classic &>/dev/null \
-       || ! pacman -S --needed --noconfirm river &>/dev/null; then
-        error "Could not replace river-classic. Run 'pacman -S river' by hand, then re-run."
-        exit 1
-    fi
-    # It was in MISSING_REPO a moment ago; installing it twice is a no-op with
-    # --needed, so the list is left alone.
-fi
 
 if [ ${#MISSING_REPO[@]} -gt 0 ]; then
     info "Installing ${#MISSING_REPO[@]} repo package(s): ${MISSING_REPO[*]}"
@@ -223,16 +195,14 @@ fi
 # ---------------------------------------------------------------------------
 step "Writing /etc/starch/profile.conf"
 
-# Preserve any value the user already set; defaults apply only when unset/empty.
-# set +e inside the subshell so a broken conf can't trip the installer's set -e.
+# Keep whatever is already set; defaults only fill in the blanks. set +e in the
+# subshell so a broken conf can't trip the installer's set -e.
 _existing() {
     [ -r /etc/starch/profile.conf ] || return 0
     ( set +e; . /etc/starch/profile.conf 2>/dev/null; eval "printf '%s' \"\${$1:-}\"" )
     return 0
 }
 V_REFRESH=$(_existing STARCH_REFRESH_FALLBACK)
-# Strictly opt-in, never defaulted: scx_lavd as default measured a ~30% FPS
-# loss in CPU-bound UE5 (Satisfactory, 90→55) on this hybrid Intel CPU.
 V_SCX=$(_existing STARCH_SCX_SCHED)
 V_STEAM_UPD=$(_existing STARCH_STEAM_UPDATES); V_STEAM_UPD="${V_STEAM_UPD:-0}"
 V_ITM=$(_existing STARCH_HDR_ITM); V_ITM="${V_ITM:-0}"
@@ -253,21 +223,20 @@ STARCH_REFRESH_FALLBACK=${V_REFRESH}
 STARCH_SCX_SCHED=${V_SCX}
 
 # 1 = let Steam's gamepad UI check for and apply OS updates (pacman -Syu via
-# the root-side starch-update-* units). Prototype — the progress display in
-# Steam may need iteration. 0 = Steam always sees "no updates".
+# the root-side starch-update-* units). 0 = Steam always sees "no updates".
+# Prototype: the progress display in Steam may need iteration.
 STARCH_STEAM_UPDATES=${V_STEAM_UPD}
 
 # --- gamescope tuning (Steam session), all optional ---
 # SDR→HDR inverse tone mapping (1 = on). Makes SDR games use HDR headroom.
 STARCH_HDR_ITM=${V_ITM}
 # Luminance of SDR content in HDR mode. Empty = gamescope default (400).
-# Note: this laptop's panel reports max ~497 nits via EDID, so there is no
-# headroom to raise this on the internal display — set it when docked to a
-# brighter HDR TV.
+# This laptop's panel reports ~497 nits max via EDID, so there's no headroom to
+# raise it on the internal display. Worth setting when docked to an HDR TV.
 STARCH_HDR_SDR_NITS=${V_SDR_NITS}
 # Upscaler: fsr | nis | linear | nearest | pixel. Empty = gamescope default.
-# (FSR 1.0 here is shader-based and vendor-agnostic — fine on NVIDIA; nis is
-# the NVIDIA-branded equivalent.)
+# FSR 1.0 is shader-based and vendor-agnostic, so it's fine on NVIDIA. nis is
+# the NVIDIA-branded equivalent.
 STARCH_SCALER=${V_SCALER}
 # Upscaler sharpness 0 (max) – 20 (min). Empty = default.
 STARCH_SHARPNESS=${V_SHARP}
@@ -278,9 +247,9 @@ info "  refresh=${V_REFRESH:-<unset>} scx=${V_SCX:-<off>} steam-updates=${V_STEA
 
 install -d -m755 /var/lib/starch
 
-# gamescope's --rt realtime scheduling and nice -20 need CAP_SYS_NICE, else it
-# logs "Performance will be affected" and runs at normal priority. The pacman
-# hook (rootfs/etc/pacman.d/hooks) reapplies the cap after each upgrade.
+# gamescope's --rt and nice -20 need CAP_SYS_NICE, else it logs "Performance
+# will be affected" and runs at normal priority. A pacman hook reapplies the cap
+# after every gamescope upgrade.
 if [ -x /usr/bin/gamescope ] && command -v setcap >/dev/null 2>&1; then
     setcap cap_sys_nice=eip /usr/bin/gamescope \
         && info "  setcap cap_sys_nice=eip /usr/bin/gamescope" \
@@ -297,7 +266,7 @@ while IFS= read -r -d '' src; do
     dst="$GAMING_HOME/$rel"
     mode=644
     [ -x "$src" ] && mode=755
-    # Install as the user so created parent dirs get the right ownership.
+    # As the user, so created parent dirs get the right ownership.
     sudo -u "$GAMING_USER" install -Dm"$mode" "$src" "$dst"
     info "  $dst"
 done < <(find "$SCRIPT_DIR/userfs" -type f -print0 | sort -z)
@@ -319,10 +288,10 @@ step "Enabling services"
 
 systemctl daemon-reload
 
-# NetworkManager owns IP for every interface (Steam's network panel reads it
-# over D-Bus), iwd is the WiFi backend, resolved does DNS. oomd needs the zram
-# swap from zram-generator. nvidia-powerd drives Dynamic Boost; the
-# suspend/resume units preserve VRAM across sleep.
+# NetworkManager owns IP on every interface (Steam's network panel reads it over
+# D-Bus), iwd is the WiFi backend, resolved does DNS. oomd needs the zram swap.
+# nvidia-powerd drives Dynamic Boost, and the suspend/resume units are what keep
+# VRAM intact across sleep.
 for svc in sddm NetworkManager iwd systemd-resolved \
            systemd-oomd bluetooth \
            nvidia-suspend nvidia-hibernate nvidia-resume nvidia-powerd; do
@@ -334,9 +303,9 @@ for svc in sddm NetworkManager iwd systemd-resolved \
     fi
 done
 
-# Steam ⇄ Desktop switching + Steam-UI updates: path units watch the user's
-# request files (Steam's container can only talk to the host via the
-# filesystem). The update-check timer feeds Steam's "update available" state.
+# Steam ⇄ Desktop switching and Steam-UI updates: path units watch the user's
+# request files, since Steam's container can only reach the host through the
+# filesystem. The timer feeds Steam's "update available" state.
 for unit in starch-session-handoff.path starch-update-apply.path \
             starch-update-check.timer starch-power-watch.service \
             fstrim.timer paccache.timer; do
@@ -345,16 +314,16 @@ for unit in starch-session-handoff.path starch-update-apply.path \
     info "  Enabled: $unit"
 done
 
-# logind drop-in (power button = suspend) applies on the next boot. NEVER
-# restart systemd-logind here: it removes every active session — running this
+# The logind drop-in (power button = suspend) applies on the next boot. NEVER
+# restart systemd-logind here: it drops every active session. Running this
 # installer from inside river kicked the session to SDDM and left seat
 # management thrashed (every relogin's DRM fd got revoked) until a reboot.
 info "  Power-button behavior (logind drop-in) applies after reboot"
 
-# BlueZ: Experimental enables BLE battery reporting (controller battery in
-# gamepadui, headphone battery via upower); FastConnectable speeds pairing.
-# No conf.d support in bluez — edit main.conf in place (pacman treats it as a
-# backup file, so upgrades leave it alone and drop a .pacnew).
+# Experimental enables BLE battery reporting (controller battery in gamepadui,
+# headphone battery via upower), FastConnectable speeds up pairing. bluez has no
+# conf.d, so main.conf gets edited in place. pacman treats it as a backup file,
+# so upgrades leave it alone and drop a .pacnew.
 if [ -f /etc/bluetooth/main.conf ]; then
     _bt_before=$(md5sum /etc/bluetooth/main.conf)
     sed -i -E \
@@ -373,8 +342,8 @@ if [ "$(readlink -f /etc/resolv.conf 2>/dev/null)" != "/run/systemd/resolve/stub
     info "  /etc/resolv.conf → systemd-resolved stub"
 fi
 
-# upower drives Steam's battery indicator. The unit is D-Bus activated (no
-# [Install]), so Steam starts it on demand; we just kick it now.
+# upower drives Steam's battery indicator. It's D-Bus activated (no [Install]),
+# so Steam starts it on demand anyway. This just kicks it now.
 if systemctl list-unit-files --quiet upower.service 2>/dev/null | grep -q upower; then
     systemctl start upower.service 2>/dev/null \
         && info "  upower.service started (battery indicator)" \
@@ -383,14 +352,14 @@ else
     warn "  upower.service not found — Steam won't show a battery indicator"
 fi
 
-# zram swap now, not just after reboot (the generator ran at daemon-reload).
+# Now, not just after a reboot: the generator already ran at daemon-reload.
 if ! swapon --show --noheadings 2>/dev/null | grep -q zram; then
     systemctl start systemd-zram-setup@zram0.service 2>/dev/null \
         && info "  zram swap active" \
         || warn "  zram swap not active yet — it will come up on reboot"
 fi
 
-# oomd protection should start now too (it needs the zram swap, which is up).
+# Needs the zram swap above, which is up.
 systemctl start systemd-oomd.service 2>/dev/null \
     && info "  systemd-oomd active" \
     || warn "  systemd-oomd not started — it will come up on reboot"
@@ -401,8 +370,8 @@ step "Kernel modules, udev, sysctl"
 modprobe uinput 2>/dev/null && info "  uinput loaded" || warn "  uinput already loaded or unavailable"
 
 udevadm control --reload-rules
-# Trigger only the subsystems our rules touch. A blanket trigger re-fires DRM
-# device events while a live session holds the GPU — part of the session-kick
+# Only the subsystems these rules touch. A blanket trigger re-fires DRM events
+# while a live session holds the GPU, which was part of the session-kick
 # incident (see the logind comment above).
 udevadm trigger --action=add \
     --subsystem-match=input --subsystem-match=hidraw \
@@ -412,88 +381,10 @@ info "  udev rules reloaded (input/hidraw/backlight/usb/misc re-triggered)"
 sysctl --system &>/dev/null && info "  sysctl settings applied" || warn "  sysctl apply had warnings (non-fatal)"
 
 # ---------------------------------------------------------------------------
-step "Removing the old virtual-sink audio mode"
-
-# It modelled each output port as a loopback sink. The loopbacks lost their
-# links on every pipewire restart and went silent, and its watcher could pin
-# the card to an empty headphone jack. WirePlumber does all of this natively.
-GAMING_HOME=$(getent passwd "$GAMING_USER" | cut -d: -f6)
-AUDIO_REMOVED=0
-
-sudo -u "$GAMING_USER" -H systemctl --user disable --now \
-    starch-audio-port-watcher.service starch-audio-setup.service &>/dev/null || true
-
-for stale in \
-    "$GAMING_HOME/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf" \
-    "$GAMING_HOME/.config/starch/audio-sinks.conf" \
-    "$GAMING_HOME/.config/systemd/user/starch-audio-port-watcher.service" \
-    "$GAMING_HOME/.local/bin/starch-audio-port-watcher" \
-    /usr/local/bin/starch-audio-setup \
-    /usr/local/bin/starch-audio-port-watcher \
-    /etc/systemd/user/starch-audio-setup.service \
-    /etc/systemd/user/starch-audio-port-watcher.service
-do
-    if [ -e "$stale" ]; then
-        rm -f "$stale" && info "  Removed $stale" && AUDIO_REMOVED=1
-    fi
-done
-
-# A configured default naming a deleted virtual sink outranks priority and
-# survives reboots, so audio lands on a sink that no longer exists.
-WP_STATE="$GAMING_HOME/.local/state/wireplumber"
-if grep -rqs "starch-out-" "$WP_STATE"; then
-    sudo -u "$GAMING_USER" -H systemctl --user stop wireplumber &>/dev/null || true
-    sed -i '/starch-out-/d' "$WP_STATE"/default-nodes "$WP_STATE"/default-routes \
-        "$WP_STATE"/stream-properties 2>/dev/null || true
-    info "  Purged stale virtual-sink entries from wireplumber state"
-    AUDIO_REMOVED=1
-fi
-
-if [ "$AUDIO_REMOVED" = "1" ]; then
-    sudo -u "$GAMING_USER" -H systemctl --user daemon-reload &>/dev/null || true
-    sudo -u "$GAMING_USER" -H systemctl --user restart \
-        pipewire pipewire-pulse wireplumber &>/dev/null || true
-    info "  Restarted pipewire/wireplumber"
-else
-    info "  Nothing to remove."
-fi
-
-# ---------------------------------------------------------------------------
-step "Removing systemd-networkd from the network stack"
-
-# Older starch had networkd on wired and iwd doing its own DHCP while NM also
-# adopted the devices — three daemons on one interface, which showed up as
-# "Foreign process 'NetworkManager' changed sysctl ... conflicting with our
-# setting" in the networkd journal. NM owns IP now.
-# Disabling the service alone leaves it running: four sockets trigger it, so
-# it comes straight back up.
-NET_CHANGED=0
-for unit in systemd-networkd.service systemd-networkd.socket \
-            systemd-networkd-varlink.socket systemd-networkd-varlink-metrics.socket \
-            systemd-networkd-resolve-hook.socket systemd-networkd-wait-online.service \
-            systemd-networkd-persistent-storage.service; do
-    systemctl list-unit-files "$unit" &>/dev/null || continue
-    if systemctl is-enabled "$unit" &>/dev/null || systemctl is-active "$unit" &>/dev/null; then
-        systemctl disable --now "$unit" &>/dev/null || true
-        NET_CHANGED=1
-    fi
-done
-[ "$NET_CHANGED" = "1" ] && info "  Disabled systemd-networkd and its activation sockets"
-for f in /etc/systemd/network/40-wired.network /etc/systemd/network/50-wifi.network; do
-    [ -e "$f" ] && rm -f "$f" && info "  Removed $f" && NET_CHANGED=1
-done
-
-if [ "$NET_CHANGED" = "1" ]; then
-    systemctl restart iwd.service &>/dev/null || true
-    systemctl restart NetworkManager.service &>/dev/null || true
-    info "  Restarted iwd + NetworkManager"
-fi
-
-# ---------------------------------------------------------------------------
 step "CPU microcode"
 
-# Package only — wiring it into the boot entry is left to you, since the
-# bootloader config is not starch's to rewrite. starch-doctor verifies it.
+# Package only. Wiring it into the boot entry is on you, since the bootloader
+# config isn't starch's to rewrite. starch-doctor checks that it landed.
 UCODE_PKG=""
 case "$(awk -F': ' '/^vendor_id/{print $2; exit}' /proc/cpuinfo)" in
     GenuineIntel) UCODE_PKG=intel-ucode ;;
@@ -527,7 +418,7 @@ echo ""
 echo "  REBOOT to apply:"
 echo "    - Early module loading (mkinitcpio change)"
 echo "    - Group membership changes for $GAMING_USER"
-echo "    - Network stack handoff (iwd / networkd / resolved)"
+echo "    - Network stack (NetworkManager / iwd / resolved)"
 echo "    - Power-button behavior (tap = suspend, hold = poweroff)"
 echo ""
 echo "  After rebooting:"

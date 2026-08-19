@@ -1,8 +1,8 @@
 #!/bin/bash
 # Root-side update runner, fired by starch-update-apply.path when the
-# containerized steamos-update writes an apply request. Streams progress as
-# "NN%" lines into a file the container side tails (the only channel that
-# crosses Steam's PID-namespaced, nosuid container is the filesystem).
+# containerized steamos-update writes an apply request. Streams progress as "NN%"
+# lines into a file the container side tails, the filesystem being the only
+# channel that crosses Steam's PID-namespaced, nosuid container.
 set -uo pipefail
 
 STATE_DIR="@@GAMING_HOME@@/.local/state/starch"

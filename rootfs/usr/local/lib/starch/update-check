@@ -1,9 +1,9 @@
 #!/bin/bash
 # Root-side update probe, run by starch-update-check.timer. Writes the pending
-# update list where Steam's containerized steamos-update can read it ($HOME is
-# the only proven-visible path inside the client container). Gated on
-# STARCH_STEAM_UPDATES in /etc/starch/profile.conf — when off, the file is
-# absent and steamos-update always reports "no updates" (exit 7).
+# update list where Steam's containerized steamos-update can read it, and $HOME
+# is the only path proven visible inside the client container. Gated on
+# STARCH_STEAM_UPDATES in /etc/starch/profile.conf: when it's off the file isn't
+# there and steamos-update always reports "no updates" (exit 7).
 set -uo pipefail
 
 STATE_DIR="@@GAMING_HOME@@/.local/state/starch"

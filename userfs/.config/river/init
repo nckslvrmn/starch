@@ -1,20 +1,18 @@
 #!/bin/bash
-# river 0.4 runs this as a process group leader once the Wayland server is up
-# but before the main loop. Unlike 0.3 it is a startup script only: river has no
-# window management of its own and the 0.3 control CLI is gone — do not name it
-# here, river greps this file for that string and refuses to start if it finds
-# it, on the assumption the migration was never finished. Layout, focus,
-# decorations, snapping and every keybinding belong to canoe, the window manager
-# started at the bottom of this file — see ~/.config/canoe/canoe.toml.
+# river runs this as a process group leader once the Wayland server is up but
+# before the main loop. It's a startup script only: river has no window
+# management of its own, so layout, focus, decorations, snapping and every
+# keybinding belong to canoe, started at the bottom of this file and configured
+# in ~/.config/canoe/canoe.toml.
 
-# way-displays handles display hotplug live (arrange, DPI scale, VRR, lid) so
-# plugging in HDMI moves the desktop with no reboot. Config: ~/.config/way-displays/cfg.yaml.
+# way-displays handles hotplug live (arrange, DPI scale, VRR, lid), so plugging
+# in HDMI moves the desktop with no reboot. See ~/.config/way-displays/cfg.yaml.
 _start_display_daemon() {
     if command -v way-displays >/dev/null 2>&1; then
         echo "[river/init] starting way-displays (reactive display hotplug)"
         way-displays >"${XDG_STATE_HOME:-$HOME/.local/state}/way-displays.log" 2>&1 &
     elif command -v wlr-randr >/dev/null 2>&1; then
-        # Fallback if the daemon is missing: one-shot, no hotplug.
+        # No daemon, so this is one-shot with no hotplug.
         echo "[river/init] way-displays not found — one-shot wlr-randr fallback"
         local primary="${STARCH_PRIMARY_OUTPUT:-}"
         [ -n "$primary" ] && wlr-randr --output "$primary" --on 2>/dev/null || true
@@ -23,9 +21,9 @@ _start_display_daemon() {
     fi
 }
 
-# Enlarge text without scaling the whole surface (stays crisp at 100% output
-# scale). 120 = 96 DPI * 1.25. GDK_DPI_SCALE for GTK, QT_FONT_DPI for Qt,
-# Xft.dpi for XWayland apps. Tune these together to resize, not the output scale.
+# Enlarge text without scaling the whole surface, so it stays crisp at 100%
+# output scale. 120 = 96 DPI * 1.25. GTK, Qt and XWayland each need their own.
+# Tune these together to resize text, not the output scale.
 export GDK_DPI_SCALE=1.25
 export QT_FONT_DPI=120
 echo 'Xft.dpi: 120' | xrdb -merge 2>/dev/null || true
@@ -36,17 +34,16 @@ systemctl --user restart xdg-desktop-portal
 
 _start_display_daemon
 
-# The window manager. river 0.4 shows nothing at all without one — no windows,
-# no keybindings, no way back out except a TTY — so anything that leaves us
-# without canoe ends the session instead of parking on a black screen.
-# Keyboard repeat (50/300, the rate this desktop has always used) is canoe's
-# built-in default, so there is nothing to set here.
+# The window manager. river shows nothing at all without one: no windows, no
+# keybindings, no way back out except a TTY. So anything that leaves us without
+# canoe ends the session instead of parking on a black screen. Keyboard repeat
+# (50/300) is canoe's built-in default, so there's nothing to set here.
 #
-# Restarting the window manager does not disturb the compositor or the running
-# apps (that is the point of the 0.4 split), so a crash is recoverable in place.
-# The loop is bounded: a canoe that dies instantly would otherwise spin forever.
-# No shutdown noise from this — river SIGTERMs the whole init process group when
-# it exits, taking the supervisor with it.
+# Restarting the window manager doesn't disturb the compositor or the running
+# apps, so a crash is recoverable in place. The loop is bounded because a canoe
+# that dies instantly would otherwise spin forever. It makes no noise at
+# shutdown: river SIGTERMs the whole init process group on the way out, taking
+# the supervisor with it.
 _supervise_wm() {
     local tries=0
     while [ "$tries" -lt 5 ]; do
@@ -67,24 +64,23 @@ else
     pkill -x river
 fi
 
-# Notification daemon — backs app notifications and the volume/brightness/
-# battery OSD (starch-osd). command -v guards a missing install.
+# Notification daemon, behind both app notifications and the
+# volume/brightness/battery OSD (starch-osd).
 command -v mako >/dev/null 2>&1 && mako &
 
-# Lock after 10 idle minutes and before suspend (lid close → logind suspend;
-# NVreg_PreserveVideoMemoryAllocations + the nvidia units make that safe).
-# The timeout goes through starch-lock-if-idle: Brave/Chromium can't inhibit
-# idle on wlroots, so playing audio (movie, music) defers the lock instead.
-# before-sleep locks unconditionally (no audio gate) but must not stack a
-# second instance over an existing lock; -e ignores empty-password submits so
-# waking the screen with Enter can't feed pam_faillock.
+# Lock after 10 idle minutes and before suspend (lid close means logind suspend,
+# which NVreg_PreserveVideoMemoryAllocations and the nvidia units make safe).
+# The timeout goes through starch-lock-if-idle because Brave and Chromium can't
+# inhibit idle on wlroots, so playing audio defers the lock instead. before-sleep
+# locks unconditionally but must not stack a second instance on an existing lock,
+# and -e ignores empty-password submits so waking with Enter can't feed
+# pam_faillock.
 if command -v swayidle >/dev/null 2>&1 && command -v swaylock >/dev/null 2>&1; then
     swayidle -w \
         timeout 600 'starch-lock-if-idle' \
         before-sleep 'pgrep -x swaylock || swaylock -f -e -c 000000' &
 fi
 
-# Started before canoe has necessarily connected — river holds unmanaged windows
-# and hands the whole set to the window manager when it attaches, so the
-# ordering is safe.
+# canoe may not have connected yet, which is fine: river holds unmanaged windows
+# and hands the whole set over when the window manager attaches.
 starch-terminal &

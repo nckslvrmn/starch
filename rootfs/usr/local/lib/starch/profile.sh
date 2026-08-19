@@ -1,18 +1,15 @@
-# shellcheck shell=bash
-# Sourced library — no shebang on purpose. NVIDIA-discrete only: the NVIDIA GPU
-# drives both scanout and rendering; the Intel iGPU is unused (BIOS set to
-# "Discrete GPU Only" / dGPU owns the panel).
+# Sourced library, no shebang on purpose. NVIDIA-discrete only: the NVIDIA GPU
+# drives both scanout and rendering and the Intel iGPU is unused, since the BIOS
+# is set to "Discrete GPU Only".
 
 STARCH_SYSTEM_CONF="/etc/starch/profile.conf"
 STARCH_USER_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/starch/display.conf"
 
 _starch_load_conf() {
     STARCH_REFRESH_FALLBACK=""
-    # shellcheck source=/dev/null
     [ -r "$STARCH_SYSTEM_CONF" ] && . "$STARCH_SYSTEM_CONF"
 }
 
-# The NVIDIA DRM card (vendor 0x10de) drives display and render.
 _starch_find_card() {
     STARCH_DISPLAY_CARD=""
     local card vendor
@@ -61,7 +58,6 @@ _starch_first_connected() {
 _starch_load_user_pref() {
     STARCH_PRIMARY_PREF="auto"
     if [ -r "$STARCH_USER_CONF" ]; then
-        # shellcheck source=/dev/null
         . "$STARCH_USER_CONF"
         case "${PRIMARY:-auto}" in
             internal|external|auto) STARCH_PRIMARY_PREF="$PRIMARY" ;;
@@ -84,10 +80,9 @@ _starch_resolve_primary_output() {
     esac
 }
 
-# gamescope's --prefer-output takes a comma-separated priority list and picks
-# the first present connector. Externals first (auto/external), internal as
-# fallback, so docking prefers the external and unplug returns to internal with
-# no reboot. Echoes the comma-joined list.
+# gamescope's --prefer-output takes a comma-separated priority list and picks the
+# first connector that's present. Externals first, internal as fallback, so
+# docking prefers the external and unplugging goes back with no reboot.
 _starch_output_priority_list() {
     _starch_load_user_pref
     local -a ext=() int=()
@@ -177,9 +172,9 @@ starch_session_begin() {
     local logfile="$HOME/.local/share/${name}-session.log"
     mkdir -p "$(dirname "$logfile")"
 
-    # tee keeps a copy on SDDM's stdout (journal) as well as the file. Known
-    # tradeoff: nothing waits on the tee at exit, so the very last lines can be
-    # lost — acceptable for a debug log that also lands in the journal.
+    # tee keeps a copy on SDDM's stdout (the journal) as well as the file.
+    # Nothing waits on the tee at exit, so the last few lines can be lost. Fine
+    # for a debug log that also lands in the journal.
     exec > >(tee "$logfile") 2>&1
 
     STARCH_SESSION_NAME="$name"
@@ -205,10 +200,10 @@ _starch_session_end() {
 }
 
 # Wait for the default sink to *stabilise*, not just exist. SDDM unlocks before
-# WirePlumber's policy pass finishes, so the first default can be auto_null or
-# an HDA stub later replaced by HDMI/Bluetooth — and Steam gamepadui latches the
-# first default forever (boot video has sound, nothing after). Reject
-# auto_null/dummy and require node.name to hold steady before returning.
+# WirePlumber's policy pass finishes, so the first default can be auto_null or an
+# HDA stub that HDMI/Bluetooth replaces a moment later, and Steam's gamepadui
+# latches the first default forever (boot video has sound, nothing after that).
+# So reject auto_null/dummy and wait for node.name to hold steady.
 starch_ensure_audio() {
     local tag="${1:-starch}"
     local timeout_ds="${2:-150}"
@@ -247,11 +242,10 @@ starch_ensure_audio() {
     return 1
 }
 
-# Pick the backlight device gamescope should drive. Targeting an inactive one
-# (machines expose several) moves the slider but changes nothing. Prefer the
-# nvidia panel, else the highest max_brightness. Echoes the basename or nothing.
-# NB: gamescope can't drive the nvidia native backlight, so the in-Steam slider
-# won't appear on this hardware — the device is still used by brightnessctl.
+# Pick the backlight device to drive. Machines expose several and targeting an
+# inactive one moves the slider without changing anything, so prefer the nvidia
+# panel, else the highest max_brightness. gamescope can't drive the nvidia native
+# backlight, so no in-Steam slider on this hardware, but brightnessctl uses it.
 starch_backlight_device() {
     local dir base best="" best_max=-1 max
     local p
@@ -316,10 +310,10 @@ starch_apply_gpu_env() {
     export NVD_BACKEND=direct
 }
 
-# Retry the compositor on non-zero exit. Gamescope 3.16 has an intermittent
-# assertion in wlr_seat_keyboard_notify_enter; a clean exit means the user
-# logged out, anything else is treated as a crash. Three fast crashes in a
-# row gives up so the user falls back to SDDM rather than thrashing.
+# Retry the compositor on a non-zero exit. gamescope 3.16 has an intermittent
+# assertion in wlr_seat_keyboard_notify_enter. A clean exit means the user logged
+# out, anything else counts as a crash. Three fast crashes in a row gives up so
+# you land back at SDDM instead of thrashing.
 starch_run_compositor() {
     local tag="$1"; shift
     [ "${1:-}" = "--" ] && shift

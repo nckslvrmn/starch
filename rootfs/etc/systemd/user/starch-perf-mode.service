@@ -1,7 +1,7 @@
 [Unit]
 Description=starch session performance preset
 # A user unit, not a system one: systemd --user runs ExecStop when the session
-# ends, so a crashed or SIGKILLed compositor still restores the preset. A root
+# ends, so even a SIGKILLed compositor still gets the preset restored. A root
 # unit would sit there RemainAfterExit with nobody left to stop it.
 
 [Service]

@@ -1,9 +1,9 @@
 #!/bin/bash
-# Request a session switch. The root-side starch-session-handoff.path unit
-# consumes the request file and does the teardown + SDDM autologin handoff.
-# Works from the desktop, a TTY, or SSH; the Steam-side equivalent lives in
-# /usr/bin/steamos-session-select (it can't call us — Steam's container
-# doesn't expose /usr/local/bin).
+# Request a session switch. The root-side starch-session-handoff.path unit picks
+# up the request file and does the teardown plus the SDDM autologin handoff.
+# Works from the desktop, a TTY or SSH. The Steam-side equivalent is
+# /usr/bin/steamos-session-select, which can't call this one because Steam's
+# container doesn't expose /usr/local/bin.
 set -euo pipefail
 
 target="${1:-}"
@@ -22,10 +22,10 @@ dir="${XDG_STATE_HOME:-$HOME/.local/state}/starch"
 mkdir -p "$dir"
 printf '%s\n' "$target" > "$dir/session-request"
 
-# Leaving river for steam: exit the compositor ourselves — the handoff helper
-# waits for the session to unwind before restarting SDDM. river 0.4 dropped
-# riverctl, so this is a plain SIGTERM; river handles it as a clean shutdown and
-# tears down the init process group (canoe, mako, swayidle) with it.
+# Leaving river for steam: exit the compositor here, since the handoff helper
+# waits for the session to unwind before restarting SDDM. river takes SIGTERM as
+# a clean shutdown and tears down the init process group (canoe, mako, swayidle)
+# along with it.
 if [ "$target" = "steam" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
    && pgrep -x river >/dev/null 2>&1; then
     pkill -x river 2>/dev/null || true

@@ -1,8 +1,8 @@
 # starch notifications (mako). Matches the black fuzzel launcher.
 #
-# Used both for app notifications and as the OSD for volume/brightness/battery
-# (see starch-osd, wired to the media keys + Super+B in river/init). Those send
-# a `value` hint, which mako renders as a progress bar via progress-color.
+# Backs both app notifications and the volume/brightness/battery OSD (starch-osd,
+# wired to the media keys and Super+B in canoe). Those send a `value` hint, which
+# mako renders as a progress bar via progress-color.
 
 font=monospace 16
 background-color=#000000ee
@@ -10,8 +10,8 @@ text-color=#ffffffff
 border-color=#222222ff
 border-size=1
 border-radius=0
-# Progress bar drawn over the background for the OSD value hint — kept a muted
-# dark shade so a partial fill reads as a faint gauge, not a hard blue/black split.
+# Drawn over the background for the OSD value hint. Muted dark, so a partial fill
+# reads as a faint gauge instead of a hard blue/black split.
 progress-color=over #16243aff
 
 anchor=top-right

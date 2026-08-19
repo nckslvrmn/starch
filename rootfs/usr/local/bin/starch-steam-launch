@@ -1,7 +1,7 @@
 #!/bin/bash
-# Run a command in a bubblewrap namespace where /etc/os-release reports
-# SteamOS. Without this, gamepadui's "Switch to Desktop" and power-menu
-# actions are silently no-ops — they're gated on the os-release marker.
+# Run a command in a bubblewrap namespace where /etc/os-release reports SteamOS.
+# gamepadui gates "Switch to Desktop" and the power-menu actions on that marker,
+# so without it they're silent no-ops.
 set -eu
 
 SPOOF=/etc/starch/os-release.steamos
@@ -15,8 +15,8 @@ if ! command -v bwrap >/dev/null 2>&1; then
     exec "$@"
 fi
 
-# On Arch /etc/os-release is a symlink to /usr/lib/os-release; bind the
-# target so resolvers of the symlink see the spoof too.
+# On Arch /etc/os-release is a symlink to /usr/lib/os-release, so bind the target
+# and anything resolving the symlink sees the spoof too.
 exec bwrap \
     --dev-bind / / \
     --bind "$SPOOF" /usr/lib/os-release \

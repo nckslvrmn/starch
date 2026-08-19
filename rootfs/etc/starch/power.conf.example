@@ -2,32 +2,32 @@
 #
 #     cp /etc/starch/power.conf.example /etc/starch/power.conf
 #
-# This .example file is redeployed on every install.sh run; power.conf itself
-# is never shipped, so your edits there survive upgrades.
+# This .example file is redeployed on every install.sh run. power.conf itself is
+# never shipped, so edits there survive upgrades.
 #
 # Every knob the FN+Q profile drives is listed here with the built-in default
 # commented out. Uncomment and edit to retune without touching the script;
 # `systemctl restart starch-power-watch` to pick up changes.
 #
-# GOV   scaling_governor. intel_pstate active mode only offers
-#       performance/powersave — anything else is silently rejected.
+# GOV   scaling_governor. intel_pstate active mode only offers performance and
+#       powersave, and anything else is silently rejected.
 # EPP   energy_performance_preference: power, balance_power,
 #       balance_performance, performance. The main efficiency lever.
 # TURBO 1 enables turbo/boost, 0 pins to base clock.
-# PL1   sustained package power (W). PL2 is the short burst ceiling.
-#       No-ops if the BIOS set the RAPL lock bit — the daemon logs it once.
+# PL1   sustained package power (W). PL2 is the short burst ceiling. Both are
+#       no-ops if the BIOS set the RAPL lock bit, which the daemon logs once.
 # ASPM  PCIe link power: default, performance, powersave, powersupersave.
 #
-# There is deliberately no GPU knob. The firmware already moves the dGPU
-# budget with the profile on its own (enforced.power.limit measured at 80 W in
-# low-power and balanced, 150 W in performance), and nvidia-smi -pl is
-# deprecated on 610.x drivers anyway.
+# There's deliberately no GPU knob. The firmware already moves the dGPU budget
+# with the profile on its own (enforced.power.limit measured at 80 W in low-power
+# and balanced, 150 W in performance), and nvidia-smi -pl is deprecated on 610.x
+# drivers anyway.
 
 # How often (seconds) to re-read the profile even with no udev event, as a
 # backstop against a wedged event pipe. Cheap; 0 is not supported.
 #RECONCILE_SEC=30
 
-# --- low-power (quiet) — maximum battery ---
+# --- low-power (quiet), maximum battery ---
 #LOW_GOV=powersave
 #LOW_EPP=power
 #LOW_TURBO=0
@@ -35,7 +35,7 @@
 #LOW_PL2=45
 #LOW_ASPM=powersupersave
 
-# --- balanced — leave the scheduler to it ---
+# --- balanced, leave the scheduler to it ---
 #BAL_GOV=powersave
 #BAL_EPP=balance_power
 #BAL_TURBO=1
@@ -43,13 +43,13 @@
 #BAL_PL2=140
 #BAL_ASPM=default
 
-# --- performance — everything off the leash ---
+# --- performance, everything off the leash ---
 #PERF_GOV=performance
 #PERF_EPP=performance
 #PERF_TURBO=1
 #PERF_PL1=          # blank = the firmware's boot-time PL1 (140 on a Legion
-                    # Pro 7 16IRX8H). Worth pinning explicitly: the automatic
-                    # capture falls back to the 55 W spec TDP if it was taken
-                    # after a preset had already lowered PL1.
+                    # Pro 7 16IRX8H). Worth pinning: the automatic capture
+                    # falls back to the 55 W spec TDP if it was taken after a
+                    # preset had already lowered PL1.
 #PERF_PL2=
 #PERF_ASPM=performance

@@ -1,8 +1,7 @@
 #!/bin/bash
-# Update the system with the rolling-release guardrails attached: run the
-# upgrade, then check for the two states that break the next gaming session
-# (kernel upgraded under a running kernel, NVIDIA userspace/module drift)
-# and say REBOOT loudly if either holds.
+# Upgrade with the rolling-release guardrails attached: run it, then check the
+# two states that break the next gaming session (kernel upgraded under a running
+# kernel, NVIDIA userspace/module drift) and say REBOOT loudly if either holds.
 set -uo pipefail
 
 if [ "${1:-}" = "--check" ] || [ "${1:-}" = "-c" ]; then

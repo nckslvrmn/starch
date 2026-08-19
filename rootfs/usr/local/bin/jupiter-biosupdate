@@ -1,5 +1,5 @@
 #!/bin/bash
 # Vendored from shahnawazshahin/steam-using-gamescope-guide (see README
-# attribution). This is not a Steam Deck; there is no jupiter BIOS to update.
+# attribution). This isn't a Steam Deck, so there's no jupiter BIOS to update.
 echo "No updates configured for this bios"
 exit 0

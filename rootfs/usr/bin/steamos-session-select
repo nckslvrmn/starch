@@ -1,16 +1,15 @@
 #!/bin/bash
 # Steam's "Switch to Desktop" invokes this with a target (`plasma` on current
-# clients). It must live in /usr/bin — Steam's container only imports that.
+# clients). It has to live in /usr/bin, the only path Steam's container imports.
 #
-# CONSTRAINT (learned the hard way — the button "never worked"): this runs
-# INSIDE Steam's pressure-vessel client container, which is PID-namespaced
-# (host processes are invisible: pgrep found no gamescope mid-session, pkill
-# and `steam -shutdown`-then-wait can't function) and nosuid (sudo/pkexec
-# fail). Do not add process management or privilege escalation here — it will
-# silently do nothing, again. The only reliable channel out is the
-# filesystem: write a request file in $HOME; the root-side
-# starch-session-handoff.path unit consumes it on the host and performs the
-# teardown + one-shot SDDM autologin into the Desktop.
+# This runs INSIDE Steam's pressure-vessel container, which is PID-namespaced
+# (host processes are invisible, so pgrep finds no gamescope mid-session and
+# pkill or `steam -shutdown`-then-wait can't work) and nosuid (sudo and pkexec
+# fail). Learned the hard way while the button "never worked": don't add process
+# management or privilege escalation here, it will silently do nothing again.
+# The filesystem is the only reliable channel out, so write a request file in
+# $HOME and let the root-side starch-session-handoff.path unit do the teardown
+# and the one-shot SDDM autologin into the desktop.
 set -u
 
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/starch/steam-session-select.log"
@@ -29,7 +28,7 @@ for arg in "$@"; do
             echo "  --dry-run validates the argument and exits 0 without switching."
             exit 0
             ;;
-        -*) ;;  # ignore unknown flags rather than failing the button
+        -*) ;;  # ignore unknown flags rather than fail the button
         *) [ -z "$TARGET" ] && TARGET="$arg" ;;
     esac
 done
@@ -44,7 +43,8 @@ case "$TARGET" in
     ""|desktop|plasma|plasma-*|gnome|gnome-*|kde|kde-*)
         ;;
     *)
-        # Treat unknown targets as desktop so a future Steam rename can't break the button.
+        # Unknown targets count as desktop, so a future Steam rename can't break
+        # the button.
         log "target='$TARGET' unrecognised — treating as desktop hand-off"
         ;;
 esac

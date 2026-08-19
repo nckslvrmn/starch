@@ -1,6 +1,6 @@
-# The #1 rolling-release gaming breakage: kernel or NVIDIA userspace updated,
-# modules for the *running* kernel are gone (or version-mismatched), and the
-# next session start fails mysteriously. Make it loud instead.
+# The number one rolling-release gaming breakage: kernel or NVIDIA userspace
+# updates, modules for the *running* kernel go missing or mismatch, and the next
+# session start fails in a confusing way. Make it loud instead.
 [Trigger]
 Operation = Install
 Operation = Upgrade

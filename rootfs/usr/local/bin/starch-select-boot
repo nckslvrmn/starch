@@ -1,12 +1,12 @@
 #!/bin/bash
-# Console mode: choose what the machine boots into. 'steam' writes a
-# persistent SDDM autologin (lid open → controller in hand, no keyboard);
-# 'greeter' restores the normal SDDM greeter. Handled by the root-side
-# starch-session-handoff unit, so no sudo needed here.
+# Console mode: pick what the machine boots into. 'steam' writes a persistent
+# SDDM autologin (lid open, controller in hand, no keyboard), 'greeter' restores
+# the normal greeter. The root-side starch-session-handoff unit does the writing,
+# so no sudo needed here.
 #
-# Persistent (20-starch-boot.conf) and one-shot (zz-starch-autologin.conf)
-# confs coexist: the one-shot sorts later and wins for a single switch, then
-# gets cleared, and boots fall back to the persistent choice.
+# The persistent conf (20-starch-boot.conf) and the one-shot one
+# (zz-starch-autologin.conf) coexist: the one-shot sorts later and wins for a
+# single switch, then gets cleared and boots fall back to the persistent choice.
 set -euo pipefail
 
 BOOT_CONF=/etc/sddm.conf.d/20-starch-boot.conf

@@ -1,25 +1,25 @@
-# Steam's own 60-steam-input.rules handles per-controller matching; this
-# file just opens the lower-level nodes Steam Input needs. User must be in
-# the 'input' group and uinput must be loaded.
+# Steam's own 60-steam-input.rules handles per-controller matching. This file
+# just opens the lower-level nodes Steam Input needs. The user has to be in the
+# 'input' group and uinput has to be loaded.
 
 KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="js*", SUBSYSTEM=="input", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# hidraw is required for DS4 / DualSense / Xbox Series controllers to send
-# rumble, LED, gyro, and adaptive-trigger reports.
+# DS4, DualSense and Xbox Series controllers need hidraw to send rumble, LED,
+# gyro and adaptive-trigger reports.
 # Sony (054c), Microsoft (045e), Nintendo (057e), 8BitDo (2dc8)
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="045e", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="057e", GROUP="input", MODE="0660", TAG+="uaccess"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2dc8", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# Nintendo GameCube USB Adapter — direct libusb access for Dolphin.
-# Pairs with the usbhid quirk in modprobe.d/gcadapter.conf.
+# Nintendo GameCube USB Adapter, direct libusb access for Dolphin. Pairs with the
+# usbhid quirk in modprobe.d/starch-gcadapter.conf.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="057e", ATTRS{idProduct}=="0337", GROUP="input", MODE="0660", TAG+="uaccess"
 
-# gamescope writes the panel backlight directly via sysfs (not logind); those
-# files are root-owned, so without this the brightness slider never appears.
-# Grant the 'video' group write.
+# gamescope writes the panel backlight straight to sysfs rather than through
+# logind, and those files are root-owned, so the brightness slider never shows up
+# without giving the 'video' group write access.
 SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power"
 SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power"

@@ -1,14 +1,10 @@
 #!/bin/bash
-# Toggle session-scoped perf tweaks (replaces gamemode, whose X11-only GPU bits
-# never worked under gamescope). `on` snapshots the current power profile and
-# switches to performance; `off` puts the old profile back.
+# Session-scoped perf preset. `on` snapshots the ACPI platform profile and
+# switches to performance, `off` puts the snapshot back.
 #
-# This used to drive governor, EPP, turbo and NVIDIA persistence directly, and
-# branched on AC vs battery. It no longer does: starch-power-watch owns every
-# one of those knobs and derives them from the platform profile. Two writers
-# meant the FN+Q hotkey could silently undo a running session's preset, and the
-# AC branch meant "performance" quietly meant two different things. Now there
-# is exactly one path — set the profile, let the watcher apply it.
+# Setting the profile is all this does. starch-power-watch owns governor, EPP,
+# turbo and RAPL and derives them from the profile, so there is exactly one
+# writer: two of them meant FN+Q could silently undo a running session's preset.
 
 set -uo pipefail
 
@@ -42,8 +38,8 @@ on)
         [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null
     fi
 
-    # Optional sched-ext scheduler (e.g. scx_lavd from the scx-scheds package).
-    # Opt-in: set STARCH_SCX_SCHED in /etc/starch/profile.conf.
+    # Opt-in sched-ext scheduler, e.g. scx_lavd. Off unless STARCH_SCX_SCHED is
+    # set in /etc/starch/profile.conf.
     SCX=""
     [ -r "$PROFILE_CONF" ] && SCX=$(. "$PROFILE_CONF" 2>/dev/null; echo "${STARCH_SCX_SCHED:-}")
     if [ -n "$SCX" ] && command -v "$SCX" >/dev/null 2>&1; then
@@ -62,8 +58,8 @@ off)
         done < "$STATE_FILE"
     fi
 
-    # Validate the snapshot against the firmware; if that profile is gone, fall
-    # back to balanced rather than leaving the machine pinned to performance.
+    # If the snapshotted profile is gone, fall back to balanced rather than
+    # leave the machine pinned to performance.
     if [ -w "$PP" ]; then
         t=$(pick_platform_profile "$PP_OLD" balanced low-power || true)
         [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null || true

@@ -1,29 +1,25 @@
 #!/bin/bash
-# starch on-screen-display: perform a volume/brightness change (or read the
-# battery) and fire a mako notification showing the result. Bound to the media
-# keys and Super+B in river/init.
+# Make a volume or brightness change (or read the battery) and fire a mako
+# notification showing the result. Bound to the media keys and Super+B in canoe.
 #
-# Each notification uses the x-canonical-private-synchronous hint so repeats in
-# the same group replace the prior toast instead of stacking — holding a volume
-# key won't pile up notifications. The int:value hint drives mako's progress bar
-# (progress-color in ~/.config/mako/config).
+# The x-canonical-private-synchronous hint makes repeats in the same group
+# replace the previous toast, so holding a volume key doesn't pile them up. The
+# int:value hint drives mako's progress bar (progress-color in mako's config).
 
 set -u
 
 SINK="@DEFAULT_AUDIO_SINK@"
 
-# Use the profile lib's backlight detection so the OSD drives the same device
-# the rest of starch does — machines expose several backlight nodes and
-# brightnessctl's default pick can be an inert one.
+# The profile lib's detection, so the OSD drives the same device the rest of
+# starch does. Machines expose several backlight nodes and brightnessctl's
+# default pick can be an inert one.
 BCTL=(brightnessctl)
 if [ -r /usr/local/lib/starch/profile.sh ]; then
-    # shellcheck disable=SC1091
     . /usr/local/lib/starch/profile.sh
     _bl=$(starch_backlight_device 2>/dev/null || true)
     [ -n "$_bl" ] && BCTL=(brightnessctl -d "$_bl")
 fi
 
-# notify <group> <title> <body> [value 0-100]
 notify() {
     local group="$1" title="$2" body="$3" value="${4:-}"
     local args=(-h "string:x-canonical-private-synchronous:$group" -t 2000)
@@ -32,7 +28,6 @@ notify() {
 }
 
 sink_volume() {
-    # Integer percent of the default sink.
     wpctl get-volume "$SINK" 2>/dev/null | awk '{printf "%d", $2 * 100}'
 }
 
@@ -41,7 +36,7 @@ sink_muted() {
 }
 
 brightness_pct() {
-    # brightnessctl -m: "name,class,current,percent,max" — field 4 is "NN%".
+    # brightnessctl -m prints "name,class,current,percent,max".
     "${BCTL[@]}" -m 2>/dev/null | cut -d, -f4 | tr -d '%'
 }
 
@@ -54,10 +49,10 @@ show_volume() {
     fi
 }
 
-# Cycle the default sink and toast its name. Only real devices are listed —
-# PipeWire drops a sink when its device disconnects, and speakers/headphones
-# are ports on one sink that jack detection switches on its own, so there is
-# nothing here to filter and no port for us to set.
+# Cycle the default sink and toast its name. Everything listed is a real device:
+# PipeWire drops a sink when its device disconnects, and speakers/headphones are
+# ports on one sink that jack detection switches on its own. So there's nothing
+# to filter and no port to set.
 sink_cycle() {
     local cur next name desc
     cur=$(pactl get-default-sink 2>/dev/null)
@@ -77,14 +72,14 @@ sink_cycle() {
     next="${sinks[$(( (cur_i + 1) % ${#sinks[@]} ))]}"
     name="${next%%$'\t'*}"
     pactl set-default-sink "$name" 2>/dev/null
-    # Without this, already-playing apps stay on the old sink until restarted.
+    # Without this, already-playing apps stay put until they restart.
     pactl list short sink-inputs 2>/dev/null | while read -r id _; do
         pactl move-sink-input "$id" "$name" 2>/dev/null || true
     done
     notify audio "Audio output" "${next#*$'\t'}"
 }
 
-# Drop the manual pick so priority rules (follow-HDMI) take over again.
+# Drop the manual pick so the priority rules (follow-HDMI) take over again.
 sink_auto() {
     wpctl set-default 2>/dev/null
     local state="${XDG_STATE_HOME:-$HOME/.local/state}/wireplumber/default-nodes"
@@ -105,7 +100,7 @@ show_battery() {
         state=$(awk '/state:/      { print $2 }' <<<"$info")
         time=$(awk -F'[[:space:]][[:space:]]+' '/time to empty:|time to full:/ { print $3 }' <<<"$info")
     fi
-    # Fallback to sysfs if upower gave us nothing.
+    # sysfs if upower gave us nothing.
     if [ -z "${cap:-}" ]; then
         local bat
         bat=$(echo /sys/class/power_supply/BAT* | awk '{print $1}')

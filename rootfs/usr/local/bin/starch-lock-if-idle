@@ -1,12 +1,12 @@
 #!/bin/bash
-# Audio-aware idle lock, run by swayidle's timeout. Chromium/Brave can't use
-# the wlroots idle-inhibit protocol, so a plain swaylock timeout fires mid-
-# movie. Gate on PipeWire instead: any running audio output stream (game,
-# video, music) counts as activity; silence for the full timeout locks.
+# Audio-aware idle lock, run by swayidle's timeout. Chromium and Brave can't use
+# the wlroots idle-inhibit protocol, so a plain swaylock timeout fires mid-movie.
+# Gate on PipeWire instead: any running audio output stream counts as activity,
+# and silence for the full timeout locks.
 set -u
 
-# Never stack a second locker on top of a running one — two instances fight
-# over keyboard input and every password reads as wrong.
+# Never stack a second locker on a running one. Two instances fight over
+# keyboard input and every password reads as wrong.
 pgrep -x swaylock >/dev/null 2>&1 && exit 0
 
 if pw-dump 2>/dev/null | jq -e '
@@ -18,7 +18,8 @@ if pw-dump 2>/dev/null | jq -e '
     exit 0
 fi
 
-# -e: don't submit empty passwords. Without it, tapping Enter to wake the
-# screen counts as a failed login — three of those and pam_faillock locks the
-# account for 10 minutes (every attempt then reads "wrong", even correct ones).
+# -e ignores empty password submits. Without it, tapping Enter to wake the screen
+# counts as a failed login, and three of those get the account locked by
+# pam_faillock for 10 minutes (every attempt then reads "wrong", correct ones
+# included).
 exec swaylock -f -e -c 000000

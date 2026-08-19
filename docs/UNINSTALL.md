@@ -1,7 +1,7 @@
 # Uninstalling starch
 
-starch is a config layer, not a distro — removal is deleting the files it
-installed and re-enabling whatever you want instead. The repo layout *is* the
+starch is a config layer, not a distro, so removing it means deleting the files
+it installed and re-enabling whatever you want instead. The repo layout *is* the
 manifest: everything under `rootfs/` maps to `/`, everything under `userfs/`
 maps to the gaming user's home.
 
@@ -19,11 +19,6 @@ rm -rf /etc/starch /var/lib/starch /usr/share/sddm/themes/starch
 
 # Per-user files (userfs/ mirrors ~)
 (cd userfs && find . -type f | sed "s|^\.|$HOME|") | xargs -r rm -f
-
-# Artifacts of the removed virtual-sink mode, if it was ever run
-rm -f ~/.config/pipewire/pipewire.conf.d/10-starch-virtual-sinks.conf \
-      ~/.config/starch/audio-sinks.conf
-rm -rf ~/.local/state/wireplumber
 ```
 
 Restore `/etc/resolv.conf` for your replacement DNS setup afterwards.

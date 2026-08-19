@@ -17,13 +17,13 @@ jobs:
                    rootfs/usr/local/lib/starch/* \
                    userfs/.config/river/init; do
             [ -f "$f" ] || continue
-            # shebang'd scripts and shebang-less sourced libs (shellcheck directive)
-            head -1 "$f" | grep -q '^#!.*\(bash\|sh\)\|^# shellcheck shell=' || continue
+            # shebang'd scripts, plus shebang-less sourced libs (*.sh)
+            head -1 "$f" | grep -q '^#!.*\(bash\|sh\)' || [ "${f%.sh}" != "$f" ] || continue
             bash -n "$f"
             echo "OK: $f"
           done
 
-      - name: shfmt parse (single Go binary; stricter parser than bash -n)
+      - name: shfmt parse (stricter parser than bash -n)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shfmt
@@ -35,14 +35,14 @@ jobs:
                    rootfs/usr/local/lib/starch/* \
                    userfs/.config/river/init; do
             [ -f "$f" ] || continue
-            head -1 "$f" | grep -q '^#!.*\(bash\|sh\)\|^# shellcheck shell=' || continue
+            head -1 "$f" | grep -q '^#!.*\(bash\|sh\)' || [ "${f%.sh}" != "$f" ] || continue
             shfmt -ln bash "$f" >/dev/null
             echo "OK: $f"
           done
 
-      - name: river init must not name the 0.3 control CLI
-        # river 0.4 greps its init file for that string and refuses to start
-        # if it appears anywhere, comments included. Cost us a dead session.
+      - name: river init must not name river's old control CLI
+        # river greps its init file for that string and refuses to start if it
+        # shows up anywhere, comments included. Cost us a dead session once.
         run: |
           if grep -q riverctl userfs/.config/river/init; then
             echo 'FAIL: userfs/.config/river/init names the 0.3 control CLI - river 0.4 will refuse to start'
@@ -53,8 +53,7 @@ jobs:
 
       - name: parse canoe.toml
         # canoe silently skips entries it can't parse, so a typo here is a
-        # keybinding that just never fires. Catch the file-level breakage at
-        # least.
+        # keybinding that never fires. This catches the file-level breakage.
         run: |
           python3 -c "import tomllib; tomllib.load(open('userfs/.config/canoe/canoe.toml','rb'))"
           echo "OK: userfs/.config/canoe/canoe.toml"

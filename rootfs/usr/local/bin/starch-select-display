@@ -6,11 +6,11 @@ CONF_FILE="$CONF_DIR/display.conf"
 
 usage() {
     cat <<'EOF'
-starch-select-display — pick which output should be the primary display.
+starch-select-display: pick which output should be the primary display.
 
-Used by the session scripts (start-river, start-steam) to route gamescope /
-wlr-randr to the right connector. The SDDM greeter itself is hosted by cage
-and appears on all connected outputs.
+Used by the session scripts (start-river, start-steam) to point gamescope and
+wlr-randr at the right connector. The SDDM greeter is hosted by cage and shows
+up on every connected output regardless.
 
 Usage:
   starch-select-display                 interactive whiptail menu
@@ -27,7 +27,6 @@ EOF
 
 current() {
     [ -r "$CONF_FILE" ] || { echo "auto"; return; }
-    # shellcheck source=/dev/null
     ( . "$CONF_FILE"; echo "${PRIMARY:-auto}" )
 }
 

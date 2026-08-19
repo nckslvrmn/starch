@@ -34,7 +34,7 @@ The installer is a manifest: `rootfs/` mirrors `/`, `userfs/` mirrors the gaming
 ## Sessions
 
 - **Steam**: gamescope with HDR and adaptive sync, Steam in Big Picture. "Switch to Desktop" lands you directly in the River desktop (one-shot SDDM autologin handoff — the greeter is back on next boot). The battery indicator works. Brightness does not show up as a slider in Steam, gamescope can't drive the NVIDIA native backlight, so use the hardware keys or `brightnessctl`.
-- **Desktop**: River 0.4 with [canoe](https://github.com/roblillack/canoe) as the window manager. River 0.4 is a compositor only — window management is a separate client speaking `river-window-management-v1`, so layout, focus, decorations and every keybinding come from canoe, configured in `~/.config/canoe/canoe.toml` (`pkill -HUP canoe` reloads it live). Windows float and are snapped on demand, and drag-to-move/resize works now, which the old river-classic layout protocol couldn't express. `~/.config/river/init` is a startup script only: way-displays, mako, swayidle, canoe. Displays are handled live by way-displays, so plugging in HDMI just works with no reboot. Terminal is ghostty via `starch-terminal` (foot is the fallback). The session locks after 10 idle minutes and before suspend (swaylock).
+- **Desktop**: River 0.4 with [canoe](https://github.com/roblillack/canoe) as the window manager. River 0.4 is a compositor only — window management is a separate client speaking `river-window-management-v1`, so layout, focus, decorations and every keybinding come from canoe, configured in `~/.config/canoe/canoe.toml` (`pkill -HUP canoe` reloads it live). Windows float and are snapped on demand, and drag-to-move/resize works. `~/.config/river/init` is a startup script only: way-displays, mako, swayidle, canoe. Displays are handled live by way-displays, so plugging in HDMI just works with no reboot. Terminal is ghostty via `starch-terminal` (foot is the fallback). The session locks after 10 idle minutes and before suspend (swaylock).
 
 Key bindings (Desktop):
 
@@ -55,7 +55,7 @@ Key bindings (Desktop):
 | `Super+B` | battery OSD |
 | `Super+Shift+E` | exit to SDDM |
 
-Two chords moved in the river-classic → canoe port, because canoe's built-in actions aren't remappable (only spawn-a-command hotkeys are): window cycling is `Super+Tab`, not `Alt+Tab`, and closing is natively `Super+W`. `Super+Q` is kept working via `wlrctl toplevel close state:active`, which goes through the compositor's foreign-toplevel protocol instead. `Super+Z` (zoom) is gone — there is no tiling stack to bump a window to the top of.
+canoe's built-in actions aren't remappable (only spawn-a-command hotkeys are), so window cycling is `Super+Tab` and closing is natively `Super+W`. `Super+Q` still works via `wlrctl toplevel close state:active`, which goes through the compositor's foreign-toplevel protocol instead.
 
 Switching the other way: launch **"Switch to Steam"** from fuzzel (or run `starch-session-request steam`) to leave the desktop and go straight into the gamescope session. `starch-session-request desktop` works from a TTY/SSH too.
 
@@ -65,7 +65,8 @@ SDDM (Wayland) handles the DRM master handoff and starts PipeWire / D-Bus / `XDG
 
 ## Performance
 
-- **Session-scoped perf mode.** `start-steam` flips `starch-perf-mode on` (and `off` on exit): on AC it pins the performance governor, intel_pstate EPP, and ACPI platform profile, plus NVIDIA persistence; on battery it biases (balanced profile, EPP) without pinning the governor. A sched-ext scheduler can optionally run for the session (`STARCH_SCX_SCHED` in `/etc/starch/profile.conf`) — off by default after scx_lavd measured ~30% FPS loss in CPU-bound UE5 here.
+- **Session-scoped perf mode.** `start-steam` flips `starch-perf-mode on` (and `off` on exit), which switches the ACPI platform profile to performance and puts the old one back afterwards. A sched-ext scheduler can optionally run for the session (`STARCH_SCX_SCHED` in `/etc/starch/profile.conf`), off by default after scx_lavd measured ~30% FPS loss in CPU-bound UE5 here.
+- **Power profiles.** `starch-power-watch` drives governor, EPP, turbo, RAPL limits and PCIe ASPM off the FN+Q platform profile, since the EC only moves its fan curve and the dGPU budget and nothing else listens. Presets are overridable in `/etc/starch/power.conf` (see `power.conf.example`).
 - **gamescope tuning knobs** live in `/etc/starch/profile.conf`: SDR→HDR inverse tone mapping, SDR nits, FSR/NIS upscaling + sharpness, and a free-form extra-args escape hatch. All off by default.
 - **zram + oomd.** Compressed swap (`zram-generator`, half of RAM, zstd) plus `systemd-oomd`, so a leaking game or Proton shader compile gets killed instead of hard-freezing the box.
 - **Realtime gamescope.** `--rt` and `nice -20` need `CAP_SYS_NICE`; install.sh grants it and a pacman hook reapplies it after every gamescope upgrade.
@@ -81,7 +82,7 @@ Optional: set `STARCH_STEAM_UPDATES=1` in `/etc/starch/profile.conf` and Steam's
 
 NetworkManager owns IP configuration on every interface, iwd is the WiFi backend (`iwctl` still works for scanning and diagnostics), systemd-resolved owns DNS.
 
-NM manages everything rather than sitting passive because Steam's gamepadui network panel reads NM over D-Bus — an interface NM doesn't manage is invisible there, so a docked ethernet link would show as "no network" while routing perfectly well. The earlier split (networkd on wired, iwd doing its own DHCP, NM adopting devices anyway) put three daemons on one interface and logged `Foreign process 'NetworkManager' changed sysctl ... conflicting with our setting` on every boot.
+NM manages everything rather than sitting passive because Steam's gamepadui network panel reads NM over D-Bus — an interface NM doesn't manage is invisible there, so a docked ethernet link would show as "no network" while routing perfectly well.
 
 ## Primary display
 
@@ -104,15 +105,13 @@ Native WirePlumber. Per-device volume sticks across reboots, and HDMI becomes th
 
 Super+A cycles the default sink and moves playing streams onto it; Super+Shift+A drops the manual pick so HDMI-follow takes over again. Speakers and headphones are two ports on one sink, switched by jack detection, so they don't appear as separate entries.
 
-Earlier versions shipped an opt-in `starch-audio-setup` that exposed one sink per physical jack, built from loopbacks. It was removed: the loopbacks lost their links on every PipeWire restart and went silent, and its watcher could pin the card to an empty headphone jack. `install.sh` removes its leftovers, including stale entries in the WirePlumber state that otherwise pin the default to a sink that no longer exists.
-
 ## Design notes
 
 - **gamescope owns the display directly.** Direct KMS scanout, no intermediate compositor, lower latency, real HDR (the internal panel is a DisplayHDR-400-class IPS — EDID reports ~500 nits max — and HDR externals work too).
 - **GPU modules in initramfs** (via `mkinitcpio.conf.d`) so DRM devices exist before SDDM starts.
 - **NVIDIA suspend safety.** `NVreg_PreserveVideoMemoryAllocations=1` plus the `nvidia-suspend`/`nvidia-resume` units so VRAM doesn't corrupt across sleep.
 - **Nothing lives in package-owned paths.** Sessions go in `/usr/local/share/wayland-sessions` and SDDM only looks there, so a river package update can't clobber anything and you won't see a stray upstream River entry.
-- **The compositor and the window manager are separate processes.** River 0.4 dropped `riverctl`/`rivertile` and all built-in window management; canoe is a normal Wayland client that drives it over `river-window-management-v1`. Practical consequence: a session with no window manager renders nothing at all, so `river/init` exits the compositor rather than leaving a black screen, and `starch-doctor` treats a missing canoe as a hard failure. The upside is that canoe can be restarted — or swapped for another window manager — without taking down the session and every app in it.
+- **The compositor and the window manager are separate processes.** River 0.4 has no built-in window management; canoe is a normal Wayland client that drives it over `river-window-management-v1`. Practical consequence: a session with no window manager renders nothing at all, so `river/init` exits the compositor rather than leaving a black screen, and `starch-doctor` treats a missing canoe as a hard failure. The upside is that canoe can be restarted — or swapped for another window manager — without taking down the session and every app in it.
 - **Session switching is filesystem-mediated.** Steam's client runs in a PID-namespaced, nosuid pressure-vessel container — it can't see host processes or escalate, so `steamos-session-select` just writes `~/.local/state/starch/session-request`; a root-side systemd path unit (`starch-session-handoff`) performs the teardown and a one-shot SDDM autologin into the target session. Same approach SteamOS uses.
 - **Rolling-release guardrails.** A pacman hook warns loudly when the kernel or NVIDIA driver updates (reboot before gaming), and `starch-doctor` checks for module/userspace version drift.
 
