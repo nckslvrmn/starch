@@ -1,0 +1,10 @@
+#!/bin/bash
+# The desktop terminal, resolved at launch time: ghostty when it works, foot on
+# the bleeding-edge days when it doesn't. canoe's terminal_cmd is a static
+# string in canoe.toml, so the fallback lives here instead of in the config.
+set -uo pipefail
+
+if command -v ghostty >/dev/null 2>&1; then
+    exec ghostty "$@"
+fi
+exec foot "$@"

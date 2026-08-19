@@ -107,7 +107,7 @@ REPO_PACKAGES=(
     pipewire-pulse
     qt6-svg
     qt6-wayland
-    river-classic
+    river                    # 0.4+: compositor only, canoe (AUR) is the WM
     scx-scheds               # sched-ext schedulers (STARCH_SCX_SCHED)
     sddm
     slurp
@@ -130,7 +130,9 @@ REPO_PACKAGES=(
 
 AUR_PACKAGES=(
     brave-bin
+    canoe                    # the window manager; river 0.4 ships none
     way-displays
+    wlrctl                   # Super+Q close (canoe's own close binding is fixed)
     xpadneo-dkms
 )
 
@@ -154,6 +156,20 @@ if pacman -Q jack2 &>/dev/null && ! pacman -Q pipewire-jack &>/dev/null; then
         error "Could not replace jack2. Run 'pacman -S pipewire-jack' by hand, then re-run."
         exit 1
     fi
+fi
+
+# Same story for river: 0.4 conflicts with river-classic, and canoe (AUR) depends
+# on it, so the old compositor has to go before either can be installed. -Rdd
+# skips the dependency check because nothing else in the set pulls river in.
+if pacman -Q river-classic &>/dev/null && ! pacman -Q river &>/dev/null; then
+    info "Replacing river-classic with river 0.4 (canoe becomes the window manager)"
+    if ! pacman -Rdd --noconfirm river-classic &>/dev/null \
+       || ! pacman -S --needed --noconfirm river &>/dev/null; then
+        error "Could not replace river-classic. Run 'pacman -S river' by hand, then re-run."
+        exit 1
+    fi
+    # It was in MISSING_REPO a moment ago; installing it twice is a no-op with
+    # --needed, so the list is left alone.
 fi
 
 if [ ${#MISSING_REPO[@]} -gt 0 ]; then
@@ -322,7 +338,8 @@ done
 # request files (Steam's container can only talk to the host via the
 # filesystem). The update-check timer feeds Steam's "update available" state.
 for unit in starch-session-handoff.path starch-update-apply.path \
-            starch-update-check.timer fstrim.timer paccache.timer; do
+            starch-update-check.timer starch-power-watch.service \
+            fstrim.timer paccache.timer; do
     systemctl enable "$unit"
     systemctl start "$unit" 2>/dev/null || true
     info "  Enabled: $unit"

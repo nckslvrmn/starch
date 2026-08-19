@@ -1,0 +1,97 @@
+# canoe — the window manager for the river 0.4 desktop session. river itself has
+# no window management, so everything that used to be a `riverctl map` line in
+# ~/.config/river/init lives here. Reload after editing with `pkill -HUP canoe`;
+# no need to restart the session.
+#
+# Windows float by default and are snapped on demand (Super+←/→/↑), which is
+# what riversnap did under river-classic, except moving and resizing with the
+# mouse now works too.
+
+main_modifier = "super"
+
+# starch-terminal resolves ghostty first and falls back to foot.
+terminal_cmd = "starch-terminal"
+launcher_cmd = "fuzzel"
+# Same flags swayidle uses, so a manual Super+L and an idle lock look identical:
+# -f daemonizes, -e ignores empty-password submits (waking the screen with Enter
+# must not feed pam_faillock).
+lock_cmd = ["swaylock", "-f", "-e", "-c", "000000"]
+
+[ui]
+# Was `riverctl background-color 0x000000`.
+desktop_background = "#000000"
+
+# canoe decorates every window that does not explicitly negotiate client-side
+# decorations, and there is no setting to turn that off — the SSD/CSD decision
+# is hardcoded. Apps opt out one at a time by asking for CSD themselves
+# (ghostty: window-decoration = none). Everything else gets the frame below:
+# flat dark instead of the stock Windows 3.x navy and silver.
+#
+# font_size also drives the window switcher and menus, not just titlebars
+# (canoe derives titlebar height from it: round(0.75 * size) * 2 + 1, so 11pt
+# gives a 17px bar). Raise it here and `pkill -HUP canoe` if the switcher reads
+# too small.
+font_size = 11.0
+border_width = 2
+
+# One flat tone per state — matching outer/mid/inner is what removes the
+# chiselled 3D edge.
+border_active = { outer = "#3a3a3a", mid = "#3a3a3a", inner = "#3a3a3a" }
+border_inactive = { outer = "#1a1a1a", mid = "#1a1a1a", inner = "#1a1a1a" }
+
+titlebar_bg_active = "#2a2a2a"
+titlebar_bg_inactive = "#141414"
+titlebar_text_active = "#e6e6e6"
+titlebar_text_inactive = "#6e6e6e"
+
+# Same three colors = no bevel on the titlebar buttons.
+button_bg = "#2a2a2a"
+button_highlight = "#2a2a2a"
+button_shadow = "#2a2a2a"
+
+shadows_enabled = false
+# No minimized-window icons on the desktop. Note this makes Super+Tab the only
+# way back to a window minimized with Super+H / Super+M / Super+Down.
+icons_enabled = false
+
+# Built-in bindings kept as-is, listed here so this file is the whole picture:
+#   Super+W               close window
+#   Super+Tab / +Shift    window switcher (was Alt+Tab under river-classic)
+#   Super+`               cycle windows of the same app
+#   Super+←/→             snap to left/right half
+#   Super+↑               maximize
+#   Super+↓               unmaximize, otherwise minimize
+#   Super+H / Super+M     minimize
+#   Super+L               lock
+#   Super+Space           launcher
+#   Super+Shift+Return    terminal
+#   Super+Alt+arrows      send window to another output
+[hotkeys]
+# Overrides the built-in Super+Return fullscreen toggle — Super+Up maximizes,
+# which is the same thing this desktop ever used it for.
+"Super+Return" = "starch-terminal"
+
+# canoe's own close binding is Super+W and cannot be remapped; this keeps the
+# river-classic muscle memory working by going through the compositor's
+# foreign-toplevel protocol instead.
+"Super+Q" = "wlrctl toplevel close state:active"
+
+"Super+B" = "starch-osd battery"
+"Super+A" = "starch-osd sink-cycle"
+"Super+Shift+A" = "starch-osd sink-auto"
+
+# Region screenshot straight to the clipboard. Array form because the command
+# substitution and the pipe need a shell.
+"Super+Shift+S" = ["sh", "-c", "grim -g \"$(slurp)\" - | wl-copy"]
+
+# Exit to SDDM. river terminates cleanly on SIGTERM and kills the init process
+# group with it, which is what `riverctl exit` used to do.
+"Super+Shift+E" = "pkill -x river"
+
+# Media keys. A chord with no modifier is a bare keysym, which is how these were
+# mapped as `riverctl map normal None ...`.
+"XF86AudioRaiseVolume" = "starch-osd vol-up"
+"XF86AudioLowerVolume" = "starch-osd vol-down"
+"XF86AudioMute" = "starch-osd mute"
+"XF86MonBrightnessUp" = "starch-osd bright-up"
+"XF86MonBrightnessDown" = "starch-osd bright-down"

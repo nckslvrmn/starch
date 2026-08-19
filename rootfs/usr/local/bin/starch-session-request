@@ -23,8 +23,10 @@ mkdir -p "$dir"
 printf '%s\n' "$target" > "$dir/session-request"
 
 # Leaving river for steam: exit the compositor ourselves — the handoff helper
-# waits for the session to unwind before restarting SDDM.
+# waits for the session to unwind before restarting SDDM. river 0.4 dropped
+# riverctl, so this is a plain SIGTERM; river handles it as a clean shutdown and
+# tears down the init process group (canoe, mako, swayidle) with it.
 if [ "$target" = "steam" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
-   && command -v riverctl >/dev/null 2>&1 && pgrep -x river >/dev/null 2>&1; then
-    riverctl exit 2>/dev/null || true
+   && pgrep -x river >/dev/null 2>&1; then
+    pkill -x river 2>/dev/null || true
 fi

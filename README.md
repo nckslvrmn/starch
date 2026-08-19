@@ -7,7 +7,7 @@ Pick Steam or Desktop from SDDM. The Steam session hands the display straight to
 ```
 SDDM (Wayland, starch theme)
 ├── Steam    →  gamescope → steam -gamepadui
-└── Desktop  →  river
+└── Desktop  →  river → canoe
 ```
 
 ## Hardware
@@ -34,7 +34,7 @@ The installer is a manifest: `rootfs/` mirrors `/`, `userfs/` mirrors the gaming
 ## Sessions
 
 - **Steam**: gamescope with HDR and adaptive sync, Steam in Big Picture. "Switch to Desktop" lands you directly in the River desktop (one-shot SDDM autologin handoff — the greeter is back on next boot). The battery indicator works. Brightness does not show up as a slider in Steam, gamescope can't drive the NVIDIA native backlight, so use the hardware keys or `brightnessctl`.
-- **Desktop**: River. Displays are handled live by way-displays, so plugging in HDMI just works with no reboot. Terminal is ghostty (foot is installed as fallback). The session locks after 10 idle minutes and before suspend (swaylock). The layout daemon is `riversnap` — a self-built binary, not packaged; on a machine without it the session falls back to stock `rivertile` (the `Super+←/→/↑` snap bindings need riversnap).
+- **Desktop**: River 0.4 with [canoe](https://github.com/roblillack/canoe) as the window manager. River 0.4 is a compositor only — window management is a separate client speaking `river-window-management-v1`, so layout, focus, decorations and every keybinding come from canoe, configured in `~/.config/canoe/canoe.toml` (`pkill -HUP canoe` reloads it live). Windows float and are snapped on demand, and drag-to-move/resize works now, which the old river-classic layout protocol couldn't express. `~/.config/river/init` is a startup script only: way-displays, mako, swayidle, canoe. Displays are handled live by way-displays, so plugging in HDMI just works with no reboot. Terminal is ghostty via `starch-terminal` (foot is the fallback). The session locks after 10 idle minutes and before suspend (swaylock).
 
 Key bindings (Desktop):
 
@@ -42,14 +42,20 @@ Key bindings (Desktop):
 |---|---|
 | `Super+Space` | launcher (fuzzel) |
 | `Super+Return` | terminal |
-| `Super+Q` | close window |
-| `Alt+Tab` / `Alt+Shift+Tab` | focus next / prev |
-| `Super+Z` | zoom (bump to top of stack) |
-| `Super+←/→/↑` | snap left / right / full (riversnap) |
+| `Super+Q` / `Super+W` | close window |
+| `Super+Tab` / `Super+Shift+Tab` | window switcher |
+| `` Super+` `` | cycle windows of the same app |
+| `Super+←/→` | snap left / right half |
+| `Super+↑` / `Super+↓` | maximize / unmaximize, else minimize |
+| `Super+drag` | move window (`Super+right-drag` resizes) |
+| `Super+Alt+←/→` | send window to another output |
+| `Super+L` | lock |
 | `Super+Shift+S` | region screenshot → clipboard |
 | `Super+A` | cycle audio output (OSD) |
 | `Super+B` | battery OSD |
 | `Super+Shift+E` | exit to SDDM |
+
+Two chords moved in the river-classic → canoe port, because canoe's built-in actions aren't remappable (only spawn-a-command hotkeys are): window cycling is `Super+Tab`, not `Alt+Tab`, and closing is natively `Super+W`. `Super+Q` is kept working via `wlrctl toplevel close state:active`, which goes through the compositor's foreign-toplevel protocol instead. `Super+Z` (zoom) is gone — there is no tiling stack to bump a window to the top of.
 
 Switching the other way: launch **"Switch to Steam"** from fuzzel (or run `starch-session-request steam`) to leave the desktop and go straight into the gamescope session. `starch-session-request desktop` works from a TTY/SSH too.
 
@@ -106,12 +112,15 @@ Earlier versions shipped an opt-in `starch-audio-setup` that exposed one sink pe
 - **GPU modules in initramfs** (via `mkinitcpio.conf.d`) so DRM devices exist before SDDM starts.
 - **NVIDIA suspend safety.** `NVreg_PreserveVideoMemoryAllocations=1` plus the `nvidia-suspend`/`nvidia-resume` units so VRAM doesn't corrupt across sleep.
 - **Nothing lives in package-owned paths.** Sessions go in `/usr/local/share/wayland-sessions` and SDDM only looks there, so a river package update can't clobber anything and you won't see a stray upstream River entry.
+- **The compositor and the window manager are separate processes.** River 0.4 dropped `riverctl`/`rivertile` and all built-in window management; canoe is a normal Wayland client that drives it over `river-window-management-v1`. Practical consequence: a session with no window manager renders nothing at all, so `river/init` exits the compositor rather than leaving a black screen, and `starch-doctor` treats a missing canoe as a hard failure. The upside is that canoe can be restarted — or swapped for another window manager — without taking down the session and every app in it.
 - **Session switching is filesystem-mediated.** Steam's client runs in a PID-namespaced, nosuid pressure-vessel container — it can't see host processes or escalate, so `steamos-session-select` just writes `~/.local/state/starch/session-request`; a root-side systemd path unit (`starch-session-handoff`) performs the teardown and a one-shot SDDM autologin into the target session. Same approach SteamOS uses.
 - **Rolling-release guardrails.** A pacman hook warns loudly when the kernel or NVIDIA driver updates (reboot before gaming), and `starch-doctor` checks for module/userspace version drift.
 
 ## Troubleshooting
 
 Session logs are in `~/.local/share/{steam,river}-session.log`. Run `starch-doctor` for a preflight check of the common breakages — including the rolling-release classics (kernel upgraded since boot, NVIDIA userspace/module drift).
+
+A desktop session that comes up as an empty screen with no windows and no working keys means canoe isn't running — river 0.4 draws nothing on its own. Check the session log for canoe's stderr, and from a TTY confirm `pacman -Q canoe river`. Editing `~/.config/canoe/canoe.toml` and running `pkill -HUP canoe` re-reads bindings and theming without restarting anything.
 
 ```bash
 journalctl -u sddm -b                          # SDDM

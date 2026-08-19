@@ -1,4 +1,11 @@
 #!/bin/bash
+# river 0.4 runs this as a process group leader once the Wayland server is up
+# but before the main loop. Unlike 0.3 it is a startup script only: river has no
+# window management of its own and the 0.3 control CLI is gone — do not name it
+# here, river greps this file for that string and refuses to start if it finds
+# it, on the assumption the migration was never finished. Layout, focus,
+# decorations, snapping and every keybinding belong to canoe, the window manager
+# started at the bottom of this file — see ~/.config/canoe/canoe.toml.
 
 # way-displays handles display hotplug live (arrange, DPI scale, VRR, lid) so
 # plugging in HDMI moves the desktop with no reboot. Config: ~/.config/way-displays/cfg.yaml.
@@ -29,48 +36,35 @@ systemctl --user restart xdg-desktop-portal
 
 _start_display_daemon
 
-# ghostty is the terminal; foot is installed as the fallback for the
-# bleeding-edge days when ghostty breaks.
-TERMINAL=$(command -v ghostty || command -v foot || echo foot)
+# The window manager. river 0.4 shows nothing at all without one — no windows,
+# no keybindings, no way back out except a TTY — so anything that leaves us
+# without canoe ends the session instead of parking on a black screen.
+# Keyboard repeat (50/300, the rate this desktop has always used) is canoe's
+# built-in default, so there is nothing to set here.
+#
+# Restarting the window manager does not disturb the compositor or the running
+# apps (that is the point of the 0.4 split), so a crash is recoverable in place.
+# The loop is bounded: a canoe that dies instantly would otherwise spin forever.
+# No shutdown noise from this — river SIGTERMs the whole init process group when
+# it exits, taking the supervisor with it.
+_supervise_wm() {
+    local tries=0
+    while [ "$tries" -lt 5 ]; do
+        canoe
+        tries=$((tries + 1))
+        echo "[river/init] canoe exited — restarting ($tries/5)"
+        sleep 1
+    done
+    echo "[river/init] canoe will not stay up — ending the session"
+    pkill -x river
+}
 
-riverctl set-repeat 50 300
-
-riverctl map normal Alt Shift Tab focus-prev
-riverctl map normal Alt Tab       focus-next
-riverctl map normal Super Z       zoom
-riverctl map normal Super Q       close
-riverctl map normal Super Space   spawn fuzzel
-riverctl map normal Super Return  spawn "$TERMINAL"
-riverctl map normal Super B       spawn 'starch-osd battery'
-riverctl map normal Super A       spawn 'starch-osd sink-cycle'
-riverctl map normal Super+Shift A spawn 'starch-osd sink-auto'
-riverctl map normal Super+Shift E exit
-
-# Region screenshot straight to the clipboard.
-riverctl map normal Super+Shift S spawn 'grim -g "$(slurp)" - | wl-copy'
-
-riverctl map normal Super Left  send-layout-cmd riversnap "left"
-riverctl map normal Super Right send-layout-cmd riversnap "right"
-riverctl map normal Super Up    send-layout-cmd riversnap "full"
-
-riverctl map normal None XF86AudioRaiseVolume  spawn 'starch-osd vol-up'
-riverctl map normal None XF86AudioLowerVolume  spawn 'starch-osd vol-down'
-riverctl map normal None XF86AudioMute         spawn 'starch-osd mute'
-
-riverctl map normal None XF86MonBrightnessUp   spawn 'starch-osd bright-up'
-riverctl map normal None XF86MonBrightnessDown spawn 'starch-osd bright-down'
-
-riverctl background-color 0x000000
-
-# riversnap is a self-built layout binary (not packaged); fall back to the
-# stock rivertile so a fresh install still gets a usable layout.
-if command -v riversnap >/dev/null 2>&1; then
-    riversnap &
-    riverctl default-layout riversnap
+if command -v canoe >/dev/null 2>&1; then
+    _supervise_wm &
 else
-    echo "[river/init] riversnap not found — falling back to rivertile"
-    rivertile -view-padding 0 -outer-padding 0 &
-    riverctl default-layout rivertile
+    echo "[river/init] canoe not found — river 0.4 has no window management without it"
+    echo "[river/init] install it with 'paru -S canoe' (or re-run install.sh), then log in again"
+    pkill -x river
 fi
 
 # Notification daemon — backs app notifications and the volume/brightness/
@@ -90,4 +84,7 @@ if command -v swayidle >/dev/null 2>&1 && command -v swaylock >/dev/null 2>&1; t
         before-sleep 'pgrep -x swaylock || swaylock -f -e -c 000000' &
 fi
 
-"$TERMINAL" &
+# Started before canoe has necessarily connected — river holds unmanaged windows
+# and hands the whole set to the window manager when it attaches, so the
+# ordering is safe.
+starch-terminal &

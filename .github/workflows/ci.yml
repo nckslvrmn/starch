@@ -40,6 +40,25 @@ jobs:
             echo "OK: $f"
           done
 
+      - name: river init must not name the 0.3 control CLI
+        # river 0.4 greps its init file for that string and refuses to start
+        # if it appears anywhere, comments included. Cost us a dead session.
+        run: |
+          if grep -q riverctl userfs/.config/river/init; then
+            echo 'FAIL: userfs/.config/river/init names the 0.3 control CLI - river 0.4 will refuse to start'
+            grep -n riverctl userfs/.config/river/init
+            exit 1
+          fi
+          echo 'OK: userfs/.config/river/init'
+
+      - name: parse canoe.toml
+        # canoe silently skips entries it can't parse, so a typo here is a
+        # keybinding that just never fires. Catch the file-level breakage at
+        # least.
+        run: |
+          python3 -c "import tomllib; tomllib.load(open('userfs/.config/canoe/canoe.toml','rb'))"
+          echo "OK: userfs/.config/canoe/canoe.toml"
+
       - name: validate session desktop files
         run: |
           sudo apt-get update -qq

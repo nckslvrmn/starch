@@ -1,0 +1,272 @@
+#!/bin/bash
+# Drive the OS-side power knobs from the Legion FN+Q power profile.
+#
+# FN+Q is handled entirely by the EC: it swaps its fan curve, updates
+# /sys/firmware/acpi/platform_profile, and moves the dGPU budget (measured
+# enforced.power.limit: 80 W in low-power and balanced, 150 W in performance).
+# Then it stops. Measured across all three profiles on a Legion Pro 7
+# 16IRX8H, every CPU-side lever was byte-identical — governor, EPP, no_turbo,
+# RAPL PL1/PL2 and scaling_max_freq did not budge, with PL1 sitting at its
+# full 140 W even in quiet mode on battery. Without power-profiles-daemon or
+# tuned installed there is nobody listening, so those sit at their boot
+# defaults forever. This daemon fills that seat: CPU only, GPU left to
+# Dynamic Boost.
+#
+# The profile is the sole authority — deliberately no AC/battery branching.
+# FN+Q means the same thing plugged in or not.
+#
+# Wakeups are event-driven: the kernel emits a udev `change` on the
+# platform-profile device (and sysfs_notify on the attribute) for every press.
+# A slow reconcile tick backs that up — see the loop at the bottom.
+
+set -uo pipefail
+
+PP=/sys/firmware/acpi/platform_profile
+CONF=/etc/starch/power.conf
+RAPL=/sys/class/powercap/intel-rapl:0
+STATE_DIR=/run/starch
+DEFAULTS=$STATE_DIR/power.defaults
+
+# Firmware defaults, sampled once at startup so the performance preset restores
+# what the vendor actually shipped instead of a hardcoded guess.
+DEF_PL1="" DEF_PL2=""
+
+log() { printf 'starch-power-watch: %s\n' "$*"; }
+
+# --- knob helpers ----------------------------------------------------------
+
+# Echo the first requested governor this CPU supports. intel_pstate in active
+# mode only offers performance/powersave — a blind schedutil write is rejected
+# and silently leaves the previous governor pinned.
+pick_governor() {
+    local avail="" g
+    read -r avail < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors 2>/dev/null \
+        || return 1
+    for g in "$@"; do
+        [ -n "$g" ] || continue
+        case " $avail " in *" $g "*) printf '%s\n' "$g"; return 0 ;; esac
+    done
+    return 1
+}
+
+apply_governor() {
+    local target="${1:-}" g
+    [ -n "$target" ] || return 0
+    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$g" ] || continue
+        echo "$target" > "$g" 2>/dev/null || true
+    done
+}
+
+# Must run *after* apply_governor: while the governor is pinned to performance
+# the kernel forces EPP=performance and rejects every other write.
+apply_epp() {
+    local target="${1:-}" e
+    [ -n "$target" ] || return 0
+    for e in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
+        [ -w "$e" ] || continue
+        echo "$target" > "$e" 2>/dev/null || true
+    done
+}
+
+# Clearing no_turbo raises cpuinfo_max_freq but leaves scaling_max_freq at the
+# old base-clock ceiling, so the governor still stops there. Both have to move
+# or turbo reads as enabled while the CPU stays pinned to base. Going the other
+# way the kernel clamps scaling_max_freq for us.
+apply_turbo() {
+    local on="${1:-1}" f
+    if [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ]; then
+        echo "$(( 1 - on ))" > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
+    elif [ -w /sys/devices/system/cpu/cpufreq/boost ]; then
+        echo "$on" > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true
+    fi
+    [ "$on" = "1" ] || return 0
+    for f in /sys/devices/system/cpu/cpu*/cpufreq; do
+        [ -w "$f/scaling_max_freq" ] && [ -r "$f/cpuinfo_max_freq" ] || continue
+        cat "$f/cpuinfo_max_freq" > "$f/scaling_max_freq" 2>/dev/null || true
+    done
+}
+
+# Package power limits, in watts. This is the biggest lever on this machine:
+# the firmware leaves PL1 at its full 140 W even in quiet mode on battery.
+# Many Legion BIOSes set the MSR lock bit, which makes the write a silent
+# no-op — so read back and say so once rather than pretending it took.
+rapl_locked=0
+apply_rapl() {
+    local pl1_w="${1:-}" pl2_w="${2:-}" want got
+    [ -n "$pl1_w" ] || return 0
+    [ -w "$RAPL/constraint_0_power_limit_uw" ] || return 0
+
+    want=$(( pl1_w * 1000000 ))
+    echo "$want" > "$RAPL/constraint_0_power_limit_uw" 2>/dev/null || true
+    if [ -n "$pl2_w" ] && [ -w "$RAPL/constraint_1_power_limit_uw" ]; then
+        echo "$(( pl2_w * 1000000 ))" > "$RAPL/constraint_1_power_limit_uw" 2>/dev/null || true
+    fi
+
+    read -r got < "$RAPL/constraint_0_power_limit_uw" 2>/dev/null || return 0
+    if [ "$got" != "$want" ] && [ "$rapl_locked" -eq 0 ]; then
+        rapl_locked=1
+        log "RAPL PL1 write ignored (wanted ${pl1_w}W, still $(( got / 1000000 ))W) — BIOS lock bit is set; relying on EPP/turbo instead"
+    fi
+}
+
+# Deliberately no GPU handling here. The dGPU budget is one of the few things
+# the platform *does* drive natively: measured enforced.power.limit is 80 W in
+# both low-power and balanced and 150 W in performance, moved by the firmware
+# and nvidia-powerd without any help from us. Setting it by hand is also not
+# available — `nvidia-smi -pl` is deprecated on 610.x (power.limit reads N/A,
+# power.management reports the call deprecated) and, worse, still exits 0
+# while doing nothing, so a naive `|| log` reports success on a silent no-op.
+# Leave the GPU to Dynamic Boost.
+
+# The policy file is root-writable but the kernel still refuses the write when
+# the BIOS never handed ASPM control to the OS via _OSC — silently, with the
+# file left on [default]. Read back the bracketed selection and say so once
+# rather than reporting a change that never happened.
+aspm_locked=0
+apply_aspm() {
+    local policy="${1:-}" f=/sys/module/pcie_aspm/parameters/policy cur sel
+    [ -n "$policy" ] || return 0
+    [ -w "$f" ] || return 0
+    echo "$policy" > "$f" 2>/dev/null || true
+    read -r cur < "$f" 2>/dev/null || return 0
+    case "$cur" in
+        *"[$policy]"*) return 0 ;;
+    esac
+    if [ "$aspm_locked" -eq 0 ]; then
+        aspm_locked=1
+        # The file lists every policy with the active one in brackets.
+        sel="${cur#*[}"; sel="${sel%%]*}"
+        log "PCIe ASPM write ignored (asked for $policy, still $sel) — firmware kept ASPM control; skipping it from here"
+    fi
+}
+
+# --- the preset table ------------------------------------------------------
+#
+# Every value is overridable from /etc/starch/power.conf, so retuning does not
+# mean editing this script.
+
+apply_profile() {
+    local p="${1:-}"
+    case "$p" in
+        low-power)
+            apply_governor "$(pick_governor "${LOW_GOV:-powersave}" powersave || true)"
+            apply_epp      "${LOW_EPP:-power}"
+            apply_turbo    "${LOW_TURBO:-0}"
+            apply_rapl     "${LOW_PL1:-35}"  "${LOW_PL2:-45}"
+            apply_aspm     "${LOW_ASPM:-powersupersave}"
+            ;;
+        balanced)
+            apply_governor "$(pick_governor "${BAL_GOV:-powersave}" powersave || true)"
+            apply_epp      "${BAL_EPP:-balance_power}"
+            apply_turbo    "${BAL_TURBO:-1}"
+            apply_rapl     "${BAL_PL1:-90}"  "${BAL_PL2:-140}"
+            apply_aspm     "${BAL_ASPM:-default}"
+            ;;
+        performance|max-power)
+            apply_governor "$(pick_governor "${PERF_GOV:-performance}" performance || true)"
+            apply_epp      "${PERF_EPP:-performance}"
+            apply_turbo    "${PERF_TURBO:-1}"
+            apply_rapl     "${PERF_PL1:-$DEF_PL1}" "${PERF_PL2:-$DEF_PL2}"
+            apply_aspm     "${PERF_ASPM:-performance}"
+            ;;
+        custom)
+            # 'custom' is the vendor tool's own scratch slot — whatever set it
+            # owns the knobs, so stay out of the way entirely.
+            log "profile 'custom' — leaving knobs untouched"
+            return 0
+            ;;
+        *)
+            log "unknown profile '$p' — ignoring"
+            return 0
+            ;;
+    esac
+    log "applied preset for '$p'"
+}
+
+# --- startup ---------------------------------------------------------------
+
+[ -r "$PP" ] || { log "no $PP on this machine — nothing to watch"; exit 0; }
+
+# Capture the firmware's power limits before we ever lower them — and make the
+# capture survive our own restarts. Resampling on every start is wrong: a
+# restart after the low-power preset has run would read 35 W, record *that* as
+# the default, and pin the performance preset to 35 W forever. /run is cleared
+# on boot, which is exactly the lifetime wanted, since the firmware reprograms
+# these at boot too. constraint_0_max_power_uw is no help here — it reports the
+# chip's 55 W spec TDP, not the 140 W the vendor firmware actually programs.
+load_defaults() {
+    local spec=""
+
+    if [ -r "$DEFAULTS" ]; then
+        # shellcheck source=/dev/null
+        . "$DEFAULTS" 2>/dev/null || true
+    fi
+    if [ -z "${DEF_PL1:-}" ]; then
+        read -r DEF_PL1 < "$RAPL/constraint_0_power_limit_uw" 2>/dev/null \
+            && DEF_PL1=$(( DEF_PL1 / 1000000 )) || DEF_PL1=""
+        read -r DEF_PL2 < "$RAPL/constraint_1_power_limit_uw" 2>/dev/null \
+            && DEF_PL2=$(( DEF_PL2 / 1000000 )) || DEF_PL2=""
+    fi
+
+    # Validate whichever path produced the value — a stale cached file is just
+    # as wrong as a late sample. A default under the chip's spec TDP means it
+    # was captured after something already lowered PL1, almost always our own
+    # low-power preset. Falling back to spec TDP keeps the performance preset
+    # sane instead of pinning it to 35 W forever.
+    read -r spec < "$RAPL/constraint_0_max_power_uw" 2>/dev/null \
+        && spec=$(( spec / 1000000 )) || spec=""
+    if [ -n "${DEF_PL1:-}" ] && [ -n "$spec" ] && [ "$spec" -gt 0 ] \
+       && [ "$DEF_PL1" -lt "$spec" ]; then
+        log "PL1 default of ${DEF_PL1}W is under the ${spec}W spec TDP — captured after a preset had already run; using ${spec}W for performance. Set PERF_PL1 in $CONF to pin the real figure."
+        DEF_PL1="$spec"
+        { [ -n "${DEF_PL2:-}" ] && [ "$DEF_PL2" -lt "$spec" ]; } && DEF_PL2="$spec"
+    fi
+
+    mkdir -p "$STATE_DIR" 2>/dev/null \
+        && printf 'DEF_PL1=%s\nDEF_PL2=%s\n' "${DEF_PL1:-}" "${DEF_PL2:-}" 2>/dev/null > "$DEFAULTS" \
+        || true
+}
+load_defaults
+# shellcheck source=/dev/null
+[ -r "$CONF" ] && . "$CONF"
+
+log "watching $PP (firmware defaults: PL1=${DEF_PL1:-?}W PL2=${DEF_PL2:-?}W)"
+
+current=""
+read -r current < "$PP" 2>/dev/null
+apply_profile "$current"
+
+# Event-driven, with a slow reconcile tick as insurance. `read -t` gives both:
+# a udev event wakes us immediately, and every RECONCILE_SEC we re-read the
+# attribute regardless. That second path is deliberate — a wedged or sandboxed
+# udev pipe otherwise fails silently and forever (PrivateNetwork=yes in the
+# unit did exactly that: healthy socket, zero events, no error). It also picks
+# up profile writes from anything that is not the hotkey, e.g. perf-mode.
+#
+# udevadm is line-buffered through stdbuf so events arrive as they happen
+# rather than in 4 KiB chunks. Re-reading the file instead of parsing the
+# event means a coalesced burst still converges on the right final state.
+RECONCILE="${RECONCILE_SEC:-30}"
+
+stdbuf -oL udevadm monitor --udev --subsystem-match=platform-profile 2>/dev/null |
+while :; do
+    if read -r -t "$RECONCILE" line; then
+        case "$line" in
+            # Let the EC settle before sampling; it updates the attribute a
+            # beat after the keypress.
+            *change*platform-profile*) sleep 0.3 ;;
+            *) continue ;;
+        esac
+    elif [ "$?" -le 128 ]; then
+        # EOF, not a timeout: udevadm died. Exit and let systemd restart us.
+        log "udev monitor pipe closed — exiting for restart"
+        exit 1
+    fi
+
+    new=""
+    read -r new < "$PP" 2>/dev/null || continue
+    [ -n "$new" ] && [ "$new" != "$current" ] || continue
+    current="$new"
+    apply_profile "$current"
+done

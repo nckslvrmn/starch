@@ -1,0 +1,30 @@
+[Unit]
+Description=starch power-profile watcher (FN+Q → CPU/GPU knobs)
+Documentation=file:///usr/local/bin/starch-power-watch
+# A system unit, not a user one: it writes /sys and must survive session
+# switches. Nothing here depends on a seat or a compositor.
+After=multi-user.target
+# power-profiles-daemon and tuned drive the same knobs. Running either
+# alongside this means two writers fighting over EPP on every press.
+Conflicts=power-profiles-daemon.service tuned.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/starch-power-watch
+# The udevadm pipe is the only thing that can end this; if it dies, come back.
+Restart=always
+RestartSec=2
+# It writes sysfs, so it needs root — but nothing else.
+#
+# Deliberately NOT PrivateNetwork=yes: the kernel broadcasts uevents only to
+# the initial network namespace, so a private netns leaves udevadm monitor
+# sitting on a healthy netlink socket that never receives a single event. The
+# service looks perfectly alive and silently never fires. AF_NETLINK has to
+# stay in RestrictAddressFamilies for the same reason.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

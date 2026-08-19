@@ -1,11 +1,14 @@
 #!/bin/bash
 # Toggle session-scoped perf tweaks (replaces gamemode, whose X11-only GPU bits
-# never worked under gamescope). `on` snapshots current values to
-# /run/starch/perf.state and applies a preset sized to the power source — on AC
-# the full performance pin (governor, EPP, platform_profile, NVIDIA
-# persistence, optional sched-ext scheduler); on battery a balanced bias with
-# the governor left alone. `off` restores from the snapshot, validating every
-# value against what the hardware actually supports.
+# never worked under gamescope). `on` snapshots the current power profile and
+# switches to performance; `off` puts the old profile back.
+#
+# This used to drive governor, EPP, turbo and NVIDIA persistence directly, and
+# branched on AC vs battery. It no longer does: starch-power-watch owns every
+# one of those knobs and derives them from the platform profile. Two writers
+# meant the FN+Q hotkey could silently undo a running session's preset, and the
+# AC branch meant "performance" quietly meant two different things. Now there
+# is exactly one path — set the profile, let the watcher apply it.
 
 set -uo pipefail
 
@@ -16,81 +19,12 @@ PROFILE_CONF=/etc/starch/profile.conf
 
 cmd="${1:-}"
 
-on_ac() {
-    local psu found=0
-    for psu in /sys/class/power_supply/*; do
-        [ -r "$psu/type" ] || continue
-        [ "$(cat "$psu/type")" = "Mains" ] || continue
-        found=1
-        [ "$(cat "$psu/online" 2>/dev/null)" = "1" ] && return 0
-    done
-    # No mains supply enumerated (desktop) — treat as AC.
-    [ "$found" -eq 0 ]
-}
-
-# Echo the first requested governor this CPU actually supports. intel_pstate in
-# active mode only offers performance/powersave — a blind schedutil write gets
-# rejected and silently leaves the previous governor pinned.
-pick_governor() {
-    local avail="" g
-    read -r avail < /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors 2>/dev/null \
-        || return 1
-    for g in "$@"; do
-        [ -n "$g" ] || continue
-        case " $avail " in *" $g "*) printf '%s\n' "$g"; return 0 ;; esac
-    done
-    return 1
-}
-
-apply_governor() {
-    local target="${1:-}" g
-    [ -n "$target" ] || return 0
-    for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        [ -w "$g" ] || continue
-        echo "$target" > "$g" 2>/dev/null || true
-    done
-}
-
-# intel_pstate EPP. Writes fail while the governor is pinned to performance
-# (the kernel forces EPP=performance there) — harmless, hence the || true.
-apply_epp() {
-    local target="${1:-}" e
-    [ -n "$target" ] || return 0
-    for e in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
-        [ -w "$e" ] || continue
-        echo "$target" > "$e" 2>/dev/null || true
-    done
-}
-
-# Clearing no_turbo raises cpuinfo_max_freq but leaves scaling_max_freq at the
-# old base-clock ceiling, so the governor still stops there. Both have to move
-# or turbo reads as enabled while the CPU stays pinned to base.
-apply_turbo() {
-    local on="${1:-1}" f
-    if [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ]; then
-        echo "$(( 1 - on ))" > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
-    elif [ -w /sys/devices/system/cpu/cpufreq/boost ]; then
-        echo "$on" > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || true
-    fi
-    for f in /sys/devices/system/cpu/cpu*/cpufreq; do
-        [ -w "$f/scaling_max_freq" ] && [ -r "$f/cpuinfo_max_freq" ] || continue
-        cat "$f/cpuinfo_max_freq" > "$f/scaling_max_freq" 2>/dev/null || true
-    done
-}
-
-read_turbo() {
-    local v
-    if read -r v < /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null; then
-        printf '%s\n' "$(( 1 - v ))"
-    elif read -r v < /sys/devices/system/cpu/cpufreq/boost 2>/dev/null; then
-        printf '%s\n' "$v"
-    fi
-}
-
+# Echo the first requested profile the firmware actually offers.
 pick_platform_profile() {
     local choices="" c
     read -r choices < "${PP}_choices" 2>/dev/null || return 1
     for c in "$@"; do
+        [ -n "$c" ] || continue
         case " $choices " in *" $c "*) printf '%s\n' "$c"; return 0 ;; esac
     done
     return 1
@@ -101,33 +35,11 @@ on)
     mkdir -p "$STATE_DIR"
     : > "$STATE_FILE"
 
-    g=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-    [ -r "$g" ] && printf 'GOV=%s\n' "$(cat "$g")" >> "$STATE_FILE"
-    e=/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference
-    [ -r "$e" ] && printf 'EPP=%s\n' "$(cat "$e")" >> "$STATE_FILE"
     [ -r "$PP" ] && printf 'PP=%s\n' "$(cat "$PP")" >> "$STATE_FILE"
-    t=$(read_turbo); [ -n "$t" ] && printf 'TURBO=%s\n' "$t" >> "$STATE_FILE"
 
-    if on_ac; then
-        apply_governor "$(pick_governor performance || true)"
-        apply_epp performance
-        apply_turbo 1
-        if [ -w "$PP" ]; then
-            t=$(pick_platform_profile performance || true)
-            [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null
-        fi
-    else
-        # On battery: bias instead of slam — EPP and platform_profile lean
-        # toward performance, the governor keeps doing power-aware scaling.
-        apply_epp balance_performance
-        if [ -w "$PP" ]; then
-            t=$(pick_platform_profile balanced-performance balanced || true)
-            [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null
-        fi
-    fi
-
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        nvidia-smi -pm 1 >/dev/null 2>&1 && printf 'NV=1\n' >> "$STATE_FILE"
+    if [ -w "$PP" ]; then
+        t=$(pick_platform_profile performance max-power balanced || true)
+        [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null
     fi
 
     # Optional sched-ext scheduler (e.g. scx_lavd from the scx-scheds package).
@@ -141,31 +53,20 @@ on)
     ;;
 
 off)
-    GOV="" EPP_OLD="" PP_OLD="" TURBO_OLD=""
+    PP_OLD=""
     if [ -r "$STATE_FILE" ]; then
         while IFS= read -r line; do
             case "$line" in
-                GOV=*)   GOV="${line#GOV=}" ;;
-                EPP=*)   EPP_OLD="${line#EPP=}" ;;
-                PP=*)    PP_OLD="${line#PP=}" ;;
-                TURBO=*) TURBO_OLD="${line#TURBO=}" ;;
+                PP=*) PP_OLD="${line#PP=}" ;;
             esac
         done < "$STATE_FILE"
     fi
 
-    [ -n "$TURBO_OLD" ] && apply_turbo "$TURBO_OLD"
-
-    # Validate the snapshot against the hardware; if it's gone, fall back
-    # through whatever this CPU actually offers.
-    apply_governor "$(pick_governor "$GOV" schedutil powersave || true)"
-    apply_epp "${EPP_OLD:-balance_performance}"
-
-    if [ -w "$PP" ] && [ -n "$PP_OLD" ]; then
-        echo "$PP_OLD" > "$PP" 2>/dev/null || true
-    fi
-
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        nvidia-smi -pm 0 >/dev/null 2>&1 || true
+    # Validate the snapshot against the firmware; if that profile is gone, fall
+    # back to balanced rather than leaving the machine pinned to performance.
+    if [ -w "$PP" ]; then
+        t=$(pick_platform_profile "$PP_OLD" balanced low-power || true)
+        [ -n "$t" ] && echo "$t" > "$PP" 2>/dev/null || true
     fi
 
     systemctl stop starch-scx.service 2>/dev/null || true

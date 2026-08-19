@@ -287,7 +287,8 @@ else
         "SessionDir not set — upstream river.desktop may show in the greeter"
 fi
 
-for s in start-steam start-river starch-steam-launch steamos-session-select starch-select-display; do
+for s in start-steam start-river starch-steam-launch steamos-session-select \
+         starch-select-display starch-terminal; do
     p=$(command -v "$s" 2>/dev/null || true)
     if [ -n "$p" ] && [ -x "$p" ]; then check "$s executable" pass "$p"
     else check "$s executable" fail "missing or not executable"
@@ -329,6 +330,64 @@ if [ -e /etc/sddm.conf.d/zz-starch-autologin.conf ]; then
         "zz-starch-autologin.conf exists — next SDDM start skips the greeter; delete if unexpected"
 else
     check "no stale one-shot autologin conf" pass
+fi
+
+section "Desktop (river + canoe)"
+
+# river 0.4 split the window manager out of the compositor: no canoe means a
+# session with no windows, no keybindings and no way out but a TTY. That makes
+# every check here a hard fail, not a warning.
+if command -v river >/dev/null 2>&1; then
+    river_ver=$(river -version 2>/dev/null | head -1)
+    case "$river_ver" in
+        0.1*|0.2*|0.3*)
+            check "river 0.4+" fail \
+                "found $river_ver — this is river-classic; 'pacman -S river' (it replaces river-classic)" ;;
+        *)  check "river 0.4+" pass "${river_ver:-version unknown}" ;;
+    esac
+else
+    check "river 0.4+" fail "not installed — re-run install.sh"
+fi
+
+if command -v canoe >/dev/null 2>&1; then
+    check "canoe installed (the window manager)" pass "$(command -v canoe)"
+else
+    check "canoe installed (the window manager)" fail \
+        "river 0.4 has no window management of its own — 'paru -S canoe'"
+fi
+
+# Run as root via sudo, the config still belongs to the desktop user.
+_doctor_home="${HOME:-}"
+[ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && \
+    _doctor_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+river_init="${XDG_CONFIG_HOME:-$_doctor_home/.config}/river/init"
+# river 0.4 greps its init file for the name of the 0.3 control CLI and refuses
+# to start if it appears anywhere, comments included. The session dies before
+# anything is drawn, so the only trace is the session log.
+if [ ! -r "$river_init" ]; then
+    check "river/init present" fail "$river_init missing — re-run install.sh"
+elif grep -q river"ctl" "$river_init"; then
+    check "river/init free of 0.3 control CLI references" fail \
+        "$river_init names it — river 0.4 refuses to start; re-run install.sh"
+else
+    check "river/init free of 0.3 control CLI references" pass
+fi
+
+canoe_cfg="${XDG_CONFIG_HOME:-$_doctor_home/.config}/canoe/canoe.toml"
+if [ -r "$canoe_cfg" ]; then
+    check "canoe.toml present" pass "$canoe_cfg"
+else
+    check "canoe.toml present" warn \
+        "$canoe_cfg missing — canoe falls back to its own defaults (no starch-osd media keys)"
+fi
+
+# Super+Q goes through the compositor's foreign-toplevel protocol because
+# canoe's built-in close binding (Super+W) can't be remapped.
+if command -v wlrctl >/dev/null 2>&1; then
+    check "wlrctl installed (Super+Q close)" pass
+else
+    check "wlrctl installed (Super+Q close)" warn \
+        "not installed — Super+Q does nothing; Super+W still closes windows"
 fi
 
 section "Updates & maintenance"
