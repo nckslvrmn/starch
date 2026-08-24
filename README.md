@@ -105,6 +105,22 @@ Native WirePlumber. Per-device volume sticks across reboots, and HDMI becomes th
 
 Super+A cycles the default sink and moves playing streams onto it; Super+Shift+A drops the manual pick so HDMI-follow takes over again. Speakers and headphones are two ports on one sink, switched by jack detection, so they don't appear as separate entries.
 
+### Internal speakers (TAS2781 smart amp)
+
+On machines whose speakers run through a TAS2781 amp (Lenovo Legion and friends —
+`Speaker Profile Id` shows up in `amixer controls`), the amp runtime-suspends 3s
+after the speakers go idle and only reloads its DSP program from the driver's
+playback hook. Come back from a long stretch on headphones and the first stream
+can beat the amp to it: the sink, the active port, the Speaker/Headphone switches
+and every volume read correct, the codec pin is unmuted, and the speakers are
+still silent. Turning the volume up does nothing, because nothing is reaching the
+amp's DSP.
+
+`starch-speaker-rearm.service` watches the headphone jack and re-arms the amp on
+every unplug — it re-selects the RCA profile to mark the config dirty, then plays
+a zero-volume stream so the reload happens before real audio. If speakers ever go
+quiet anyway, `starch-speaker-rearm` fixes it on the spot without a reboot.
+
 ## Design notes
 
 - **gamescope owns the display directly.** Direct KMS scanout, no intermediate compositor, lower latency, real HDR (the internal panel is a DisplayHDR-400-class IPS — EDID reports ~500 nits max — and HDR externals work too).

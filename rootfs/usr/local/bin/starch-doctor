@@ -246,6 +246,31 @@ for svc in nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service
     fi
 done
 
+section "Audio"
+
+if amixer -c 0 controls 2>/dev/null | grep -q "name='Speaker Profile Id'" || \
+   amixer controls 2>/dev/null | grep -q "name='Speaker Profile Id'"; then
+    # TAS2781 machine: the speakers go through a smart amp that drops its DSP
+    # program while runtime-suspended, so a headphone unplug can land on silent
+    # speakers with every mixer control still reading correct.
+    if systemctl --user is-active starch-speaker-rearm.service &>/dev/null; then
+        check "speaker amp re-arm running" pass "TAS2781 detected"
+    elif systemctl --user is-enabled starch-speaker-rearm.service &>/dev/null; then
+        check "speaker amp re-arm running" warn "enabled but not active — run: systemctl --user start starch-speaker-rearm"
+    else
+        check "speaker amp re-arm running" warn \
+            "TAS2781 detected but starch-speaker-rearm is not enabled — speakers can go silent after unplugging headphones (fix now: starch-speaker-rearm)"
+    fi
+fi
+
+if command -v wpctl >/dev/null 2>&1; then
+    if systemctl --user is-active wireplumber.service &>/dev/null; then
+        check "wireplumber active" pass
+    else
+        check "wireplumber active" warn "no audio routing until this is running"
+    fi
+fi
+
 section "Power / battery (Steam gamepadui)"
 
 if command -v upower >/dev/null 2>&1; then

@@ -1,0 +1,120 @@
+#!/bin/bash
+# Re-arm the TAS2781 smart amp behind the internal speakers.
+#
+# The amp runtime-suspends 3s after the speakers go idle and its DSP program is
+# only (re)loaded by the driver's playback hook. Coming back from a long spell on
+# headphones the first stream can reach the speakers before the amp is
+# programmed: the route, the Speaker/Headphone switches and every volume read
+# correct, the codec pin is unmuted, and still nothing comes out. Re-selecting
+# the RCA profile marks the config dirty, and a short silent stream makes the
+# driver reload it before real audio arrives.
+#
+# Run it by hand the moment the speakers go quiet, or let --watch fire it on
+# every headphone unplug.
+
+set -u
+
+TAG="starch-speaker-rearm"
+PROFILE_CTL="Speaker Profile Id"
+JACK_CTL="Headphone Jack"
+
+log() { printf '[%s] %s\n' "$TAG" "$*"; }
+
+# The internal codec is whichever card exposes the amp's profile control, not
+# necessarily card 0 — an eGPU or a USB interface can claim a lower index.
+find_codec_card() {
+    local card
+    for card in /proc/asound/card[0-9]*; do
+        card="${card##*/card}"
+        if amixer -c "$card" controls 2>/dev/null | grep -qF "name='$PROFILE_CTL'"; then
+            printf '%s\n' "$card"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ctl_numid() {
+    amixer -c "$1" controls 2>/dev/null \
+        | awk -F'numid=|,' -v n="name='$2'" '$0 ~ n { print $2; exit }'
+}
+
+ctl_value() {
+    amixer -c "$1" cget "numid=$2" 2>/dev/null \
+        | awk -F'=' '/^  : values=/ { print $2; exit }'
+}
+
+ctl_max() {
+    amixer -c "$1" cget "numid=$2" 2>/dev/null \
+        | awk 'match($0, /max=[0-9]+/) { print substr($0, RSTART + 4, RLENGTH - 4); exit }'
+}
+
+headphones_plugged() {
+    local card="$1" numid
+    numid=$(ctl_numid "$card" "$JACK_CTL") || return 1
+    [ -n "$numid" ] || return 1
+    [ "$(ctl_value "$card" "$numid")" = "on" ]
+}
+
+# Nudge the profile to a different value and back. Only a *change* marks the
+# config dirty, so writing the current value again would be a no-op.
+rearm() {
+    local card="$1" numid cur max other
+    numid=$(ctl_numid "$card" "$PROFILE_CTL")
+    if [ -z "$numid" ]; then
+        log "no '$PROFILE_CTL' on card $card — not a TAS2781 machine, nothing to do"
+        return 0
+    fi
+
+    cur=$(ctl_value "$card" "$numid")
+    max=$(ctl_max "$card" "$numid")
+    : "${cur:=0}" "${max:=0}"
+
+    if [ "$max" -lt 1 ]; then
+        log "profile control has no alternate value (max=$max) — priming only"
+    else
+        other=$(( cur == 0 ? 1 : 0 ))
+        amixer -c "$card" cset "numid=$numid" "$other" >/dev/null 2>&1
+        amixer -c "$card" cset "numid=$numid" "$cur"   >/dev/null 2>&1
+        log "profile $cur -> $other -> $cur on card $card"
+    fi
+
+    # Silent stream so the driver's playback hook reloads the DSP now rather than
+    # under the first real sound. --volume=0 keeps it inaudible even if the amp
+    # was fine all along.
+    timeout 2 pw-cat -p --raw --format=s16 --rate=48000 --channels=2 \
+        --volume=0 /dev/zero >/dev/null 2>&1
+    log "primed"
+}
+
+# alsactl reports a line per control change. Jack events also fire while the
+# route is still moving, so settle briefly and re-read the jack instead of
+# trusting the event itself.
+watch_jack() {
+    local card="$1" line
+    log "watching card $card for headphone unplug"
+    while IFS= read -r line; do
+        case "$line" in
+            *"$JACK_CTL"*) ;;
+            *) continue ;;
+        esac
+        sleep 0.5
+        if headphones_plugged "$card"; then
+            log "headphones plugged — amp not needed"
+        else
+            log "headphones unplugged — re-arming speakers"
+            rearm "$card"
+        fi
+    done < <(alsactl monitor "hw:$card")
+}
+
+CARD=$(find_codec_card) || {
+    log "no card exposes '$PROFILE_CTL' — nothing to do"
+    exit 0
+}
+
+case "${1:-}" in
+    --watch) watch_jack "$CARD" ;;
+    ""|--once) rearm "$CARD" ;;
+    *) echo "usage: starch-speaker-rearm [--once|--watch]" >&2; exit 1 ;;
+esac

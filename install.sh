@@ -314,6 +314,15 @@ for unit in starch-session-handoff.path starch-update-apply.path \
     info "  Enabled: $unit"
 done
 
+# The TAS2781 amp behind the internal speakers loses its DSP program while it is
+# runtime-suspended, so coming off headphones can leave the speakers silent with
+# every mixer control reading correct. A user unit (not a system one) because the
+# priming stream goes through the user's PipeWire.
+if [ -f /etc/systemd/user/starch-speaker-rearm.service ]; then
+    systemctl --global enable starch-speaker-rearm.service 2>/dev/null || true
+    info "  Enabled (user): starch-speaker-rearm.service"
+fi
+
 # The logind drop-in (power button = suspend) applies on the next boot. NEVER
 # restart systemd-logind here: it drops every active session. Running this
 # installer from inside river kicked the session to SDDM and left seat

@@ -1,0 +1,19 @@
+[Unit]
+Description=starch internal speaker amp re-arm on headphone unplug
+# A user unit, not a system one: the priming stream goes through this user's
+# PipeWire, so it needs the session bus and XDG_RUNTIME_DIR that systemd --user
+# already provides. It only watches an ALSA control, so it costs nothing idle.
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/starch-speaker-rearm --watch
+# alsactl monitor exits if the card disappears (module reload, docking). Come
+# back rather than leaving the speakers to wedge silently for the rest of the
+# session.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
