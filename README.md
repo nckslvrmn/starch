@@ -71,6 +71,7 @@ SDDM (Wayland) handles the DRM master handoff and starts PipeWire / D-Bus / `XDG
 - **zram + oomd.** Compressed swap (`zram-generator`, half of RAM, zstd) plus `systemd-oomd`, so a leaking game or Proton shader compile gets killed instead of hard-freezing the box.
 - **Realtime gamescope.** `--rt` and `nice -20` need `CAP_SYS_NICE`; install.sh grants it and a pacman hook reapplies it after every gamescope upgrade.
 - **MangoHud** ships with a default config (`Shift_R+F12` toggles the HUD, `Shift_L+F1` cycles FPS caps). Per-game on the desktop: `MANGOHUD=1 %command%`.
+- **Telemetry capture.** `starch-gameload %command%` in a game's Steam launch options samples GPU power/util/clocks/temps, CPU clock and live PL1 for the game's lifetime, then writes a CSV and a verdict to `~/.local/share/starch/`. It reads `clocks_throttle_reasons`, so it distinguishes "GPU-bound at its power limit" (nothing to fix) from thermal throttling or a CPU preset that never reached performance. Also runs standalone (`starch-gameload`, Ctrl-C to stop) when there's a terminal to hand.
 
 ## Updates
 
@@ -110,16 +111,31 @@ Super+A cycles the default sink and moves playing streams onto it; Super+Shift+A
 On machines whose speakers run through a TAS2781 amp (Lenovo Legion and friends —
 `Speaker Profile Id` shows up in `amixer controls`), the amp runtime-suspends 3s
 after the speakers go idle and only reloads its DSP program from the driver's
-playback hook. Come back from a long stretch on headphones and the first stream
-can beat the amp to it: the sink, the active port, the Speaker/Headphone switches
-and every volume read correct, the codec pin is unmuted, and the speakers are
-still silent. Turning the volume up does nothing, because nothing is reaching the
-amp's DSP.
+playback hook. The next stream races that reload, and when it loses, the sink,
+the active port, the Speaker/Headphone switches and every volume read correct,
+the codec pin is unmuted, and the speakers are still silent. Turning the volume
+up does nothing, because nothing is reaching the amp's DSP.
 
-`starch-speaker-rearm.service` watches the headphone jack and re-arms the amp on
-every unplug — it re-selects the RCA profile to mark the config dirty, then plays
-a zero-volume stream so the reload happens before real audio. If speakers ever go
-quiet anyway, `starch-speaker-rearm` fixes it on the spot without a reboot.
+The classic trigger is coming back from a long stretch on headphones, but the
+suspend is driven by **idle, not by the jack** — anything that leaves the
+speakers quiet for a few seconds arms the trap. In a Steam session that reads as
+"the startup chime played, then nothing else ever did".
+
+`71-starch-audio.rules` pins the amp's runtime PM (`power/control=on`) so it
+never suspends and the program stays resident. That removes the race rather than
+reacting to it, at the cost of the amp's idle draw. `starch-doctor` warns if the
+pin isn't applied.
+
+`starch-speaker-rearm.service` remains as the manual escape, and still watches
+the headphone jack — it re-selects the RCA profile to mark the config dirty, then
+plays a zero-volume stream so the reload happens before real audio. If speakers
+ever go quiet anyway, `starch-speaker-rearm` fixes it on the spot without a
+reboot.
+
+To tell an amp failure apart from a routing one, run a game with
+`starch-gameload %command%` as its Steam launch option: the audio log it writes
+next to the telemetry records the sink, port and every stream's target, mute and
+cork state. A correct graph with silent speakers is this bug.
 
 ## Design notes
 

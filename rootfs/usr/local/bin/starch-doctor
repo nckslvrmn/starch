@@ -261,6 +261,23 @@ if amixer -c 0 controls 2>/dev/null | grep -q "name='Speaker Profile Id'" || \
         check "speaker amp re-arm running" warn \
             "TAS2781 detected but starch-speaker-rearm is not enabled — speakers can go silent after unplugging headphones (fix now: starch-speaker-rearm)"
     fi
+
+    # The re-arm service only fires on a headphone-jack event, but the amp
+    # suspends on idle whether or not headphones are involved — so the pin is
+    # what actually closes the race, and the service is just the manual escape.
+    amp_pm=""
+    for d in /sys/bus/i2c/devices/*; do
+        [ -L "$d/driver" ] || continue
+        case "$(readlink -f "$d/driver" 2>/dev/null)" in
+            */tas2781-hda) amp_pm=$(cat "$d/power/control" 2>/dev/null); break ;;
+        esac
+    done
+    if [ "$amp_pm" = "on" ]; then
+        check "speaker amp runtime PM pinned" pass "DSP program stays resident"
+    elif [ -n "$amp_pm" ]; then
+        check "speaker amp runtime PM pinned" warn \
+            "power/control=$amp_pm — the amp suspends 3s after idle and the next stream can land on an unprogrammed DSP (silent speakers, every control reading correct). Check 71-starch-audio.rules deployed, then: udevadm trigger -s i2c"
+    fi
 fi
 
 if command -v wpctl >/dev/null 2>&1; then

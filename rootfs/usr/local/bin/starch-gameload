@@ -1,0 +1,371 @@
+#!/bin/bash
+# Sample GPU, CPU and audio-graph telemetry while a game runs, to tell "this game
+# is heavy" apart from "something is capping us", and "the game never opened an
+# audio device" apart from "its stream landed on the wrong sink".
+#
+# Steam launch options:  starch-gameload %command%
+# Standalone:            starch-gameload          (Ctrl-C to stop)
+#
+# Wrapping %command% rather than running alongside is what makes this usable in
+# the gamescope session: there's no terminal to start it from and no SSH here,
+# so the game's own lifetime is the sampling window. Steam's stdout goes
+# somewhere awkward for the same reason, so the summary is written to a file
+# next to the CSV instead of only printed.
+#
+# The game's exit status is passed through, since Steam treats a non-zero exit
+# from the wrapper as the game having crashed.
+
+set -uo pipefail
+
+INTERVAL="${STARCH_GAMELOAD_INTERVAL:-1}"
+# Audio state changes in steps, not continuously, and every probe is three
+# subprocesses — so it polls slower than the GPU counters and only writes when
+# something actually moved.
+AUDIO_INTERVAL="${STARCH_GAMELOAD_AUDIO_INTERVAL:-2}"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/starch"
+STAMP=$(date +%Y%m%d-%H%M%S)
+CSV="$DATA_DIR/gameload-$STAMP.csv"
+TXT="$DATA_DIR/gameload-$STAMP.txt"
+AUDIO="$DATA_DIR/gameload-$STAMP-audio.log"
+
+mkdir -p "$DATA_DIR" || exit 1
+
+# Throttle reasons are the whole point: they say outright whether the ceiling is
+# the power limit, heat, or nothing at all. nounits keeps the CSV numeric, and
+# stripping spaces turns "Not Active" into a single token so awk can compare it.
+FIELDS='power.draw,enforced.power.limit,utilization.gpu,utilization.memory'
+FIELDS+=',clocks.sm,clocks.mem,temperature.gpu,pstate'
+FIELDS+=',clocks_throttle_reasons.sw_power_cap'
+FIELDS+=',clocks_throttle_reasons.hw_thermal_slowdown'
+FIELDS+=',clocks_throttle_reasons.sw_thermal_slowdown'
+FIELDS+=',clocks_throttle_reasons.hw_power_brake_slowdown'
+
+# thermal_zone0 is not the package sensor on every board, so find it by type and
+# only fall back to guessing.
+find_cpu_temp_zone() {
+    local z
+    for z in /sys/class/thermal/thermal_zone*; do
+        [ -r "$z/type" ] || continue
+        case "$(cat "$z/type" 2>/dev/null)" in
+            x86_pkg_temp) printf '%s\n' "$z/temp"; return 0 ;;
+        esac
+    done
+    [ -r /sys/class/thermal/thermal_zone0/temp ] && \
+        printf '%s\n' /sys/class/thermal/thermal_zone0/temp
+}
+CPU_TEMP_FILE="$(find_cpu_temp_zone)"
+
+RAPL_PL1=/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
+
+sample_loop() {
+    echo "ts,gpu_w,gpu_limit_w,gpu_util,vram_util,sm_mhz,mem_mhz,gpu_c,pstate,thr_swpower,thr_hwtherm,thr_swtherm,thr_brake,cpu_mhz_avg,cpu_c,pl1_w" > "$CSV"
+    local g cpu ctemp pl1
+    while :; do
+        g=$(nvidia-smi --query-gpu="$FIELDS" --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
+        [ -n "$g" ] || { sleep "$INTERVAL"; continue; }
+
+        # Mean over every logical CPU: a thread pin or a stuck-at-base-clock
+        # shows up here, where a single-core reading would hide it.
+        cpu=$(awk '/cpu MHz/ {s+=$4; n++} END {if (n) printf "%.0f", s/n; else print 0}' /proc/cpuinfo)
+        ctemp=0
+        [ -n "$CPU_TEMP_FILE" ] && \
+            ctemp=$(awk '{printf "%.0f", $1/1000}' "$CPU_TEMP_FILE" 2>/dev/null || echo 0)
+        pl1=$(( $(cat "$RAPL_PL1" 2>/dev/null || echo 0) / 1000000 ))
+
+        printf '%s,%s,%s,%s,%s\n' "$(date +%H:%M:%S)" "$g" "$cpu" "$ctemp" "$pl1" >> "$CSV"
+        sleep "$INTERVAL"
+    done
+}
+
+# One flat line per sink and per stream, spaces squashed out of every value so
+# awk can read the log back field by field. No timestamp here — the caller
+# stamps it, which keeps the snapshot comparable against the previous one.
+audio_probe() {
+    local sj ij def
+    sj=$(pactl -f json list sinks 2>/dev/null);       [ -n "$sj" ] || sj='[]'
+    ij=$(pactl -f json list sink-inputs 2>/dev/null); [ -n "$ij" ] || ij='[]'
+    def=$(pactl get-default-sink 2>/dev/null)
+    printf 'default=%s\n' "${def:-none}"
+
+    jq -rn --argjson sinks "$sj" --argjson ins "$ij" '
+      def nospace: tostring | gsub("\\s+"; "_");
+      def pct: (.volume // {}) | to_entries | ((.[0].value.value_percent // "?") | tostring | gsub("%"; ""));
+      ($sinks | map({ key: (.index | tostring), value: .name }) | from_entries) as $byidx
+      | ($sinks[]? | "sink name=\(.name) state=\(.state) mute=\(.mute) vol=\(pct) port=\((.active_port // "-") | nospace)"),
+        (if ($ins | length) == 0 then "nostream"
+         else ($ins[] | "stream idx=\(.index) sink=\($byidx[(.sink | tostring)] // (.sink | tostring)) app=\((.properties["application.name"] // "?") | nospace) binary=\((.properties["application.process.binary"] // "?") | nospace) corked=\(.corked) mute=\(.mute) vol=\(pct) target=\((.properties["target.object"] // .properties["target.node"] // "-") | nospace)")
+         end)
+    ' 2>/dev/null
+}
+
+audio_write() {
+    audio_probe | sed "s/^/$(date +%H:%M:%S) /" >> "$AUDIO"
+}
+
+# A PULSE_SINK or PULSE_SERVER left in a game's launch options pins it to one
+# device for good, which looks exactly like a routing bug from the outside — so
+# record the environment the game inherited, not just the graph it produced.
+audio_header() {
+    {
+        echo "# starch-gameload audio log — $(date '+%Y-%m-%d %H:%M:%S')"
+        local v
+        for v in PULSE_SERVER PULSE_SINK PULSE_LATENCY_MSEC SDL_AUDIODRIVER \
+                 XDG_RUNTIME_DIR PIPEWIRE_RUNTIME_DIR PROTON_NO_FSYNC; do
+            echo "# env $v=${!v:-<unset>}"
+        done
+        local sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pulse/native"
+        [ -S "$sock" ] && echo "# socket $sock present" || echo "# socket $sock MISSING"
+        command -v jq >/dev/null 2>&1 || echo "# jq missing — no audio samples will be recorded"
+    } > "$AUDIO"
+}
+
+audio_loop() {
+    local snap last=""
+    while :; do
+        snap=$(audio_probe)
+        if [ "$snap" != "$last" ]; then
+            printf '%s\n' "$snap" | sed "s/^/$(date +%H:%M:%S) /" >> "$AUDIO"
+            last="$snap"
+        fi
+        sleep "$AUDIO_INTERVAL"
+    done
+}
+
+summarize() {
+    [ -r "$CSV" ] || return 0
+    # Menus, loading screens and shader compiles sit at low GPU utilisation and
+    # drag every average toward "idle", which is how a genuinely GPU-bound run
+    # reads as CPU-bound. Stats come from loaded samples only; the full-run count
+    # is still printed so a run that was mostly menus is obvious.
+    awk -F, '
+        function tsec(s,   a) { split(s, a, ":"); return a[1] * 3600 + a[2] * 60 + a[3] }
+        NR > 1 {
+            total++
+            # Each sample costs an nvidia-smi round-trip on top of the sleep, so
+            # samples x interval undercounts the real window by ~25%. Take the
+            # elapsed time off the timestamps instead.
+            if (!have0) { have0 = 1; t0 = tsec($1) }
+            tlast = tsec($1)
+            # Dynamic Boost moves the ceiling sample to sample, so the headroom
+            # question is against the highest grant seen, not the last one.
+            if ($3 + 0 > lim) lim = $3 + 0
+            if ($16 + 0 > 0) pl1 = $16
+
+            if ($4 + 0 <= 50) next
+            n++; gw += $2; gu += $4; sm += $6; gc += $8; cm += $14; ct += $15
+            if ($2 + 0 > gwmax) gwmax = $2 + 0
+            if ($8 + 0 > gcmax) gcmax = $8 + 0
+            if ($15 + 0 > ctmax) ctmax = $15 + 0
+            if ($10 == "Active") swp++
+            if ($11 == "Active") hwt++
+            if ($13 == "Active") brk++
+            # Split SM clock by thermal state: the gap between them is the clock
+            # the slowdown is actually costing, which is the number worth acting on.
+            if ($12 == "Active") { swt++; tsm += $6 } else { nsm += $6; nn++ }
+        }
+        END {
+            if (!total) { print "no samples captured"; exit }
+            elapsed = tlast - t0
+            if (elapsed < 0) elapsed += 86400
+            if (elapsed <= 0) elapsed = total * INTERVAL
+            printf "samples        : %d over %ds (%.0f min)  (%d under load, %.0f%%)\n", \
+                total, elapsed, elapsed / 60, n, total ? n / total * 100 : 0
+            if (!n) {
+                print "\nNo samples above 50% GPU utilisation — the run was menus or loading."
+                exit
+            }
+            therm = swt + hwt
+            printf "GPU power      : avg %.1f W   peak %.1f W   (max grant %.0f W)\n", gw/n, gwmax, lim
+            printf "GPU util       : avg %.0f%%\n", gu/n
+            printf "GPU SM clock   : avg %.0f MHz\n", sm/n
+            printf "GPU temp       : avg %.0f C   peak %.0f C\n", gc/n, gcmax
+            printf "CPU clock      : avg %.0f MHz\n", cm/n
+            printf "CPU temp       : avg %.0f C   peak %.0f C\n", ct/n, ctmax
+            printf "CPU PL1        : %s W\n", pl1
+            printf "\nthrottling (of %d loaded samples)\n", n
+            printf "  sw_power_cap : %d (%.0f%%)\n", swp, swp/n*100
+            printf "  sw_thermal   : %d (%.0f%%)\n", swt, swt/n*100
+            printf "  hw_thermal   : %d (%.0f%%)\n", hwt, hwt/n*100
+            printf "  power_brake  : %d (%.0f%%)\n", brk, brk/n*100
+            if (swt && nn)
+                printf "\nSM clock while thermally slowed: %.0f MHz vs %.0f MHz otherwise (costing %.0f MHz, %.0f%%)\n", \
+                    tsm/swt, nsm/nn, nsm/nn - tsm/swt, (nsm/nn - tsm/swt) / (nsm/nn) * 100
+
+            # The throttle counters are the authoritative answer to "why is it not
+            # faster", so they lead. Inferring from temps alone got this wrong:
+            # sw_thermal engages well below any temperature that looks alarming.
+            printf "\nverdict: "
+            if (therm / n > 0.20)
+                printf "Thermal-limited. The GPU is in thermal slowdown %.0f%% of loaded samples%s. Power and config are fine — cooling is the ceiling.\n", \
+                    therm/n*100, (ctmax >= 99 ? ", and the CPU is hitting TjMax" : "")
+            else if (pl1 + 0 > 0 && pl1 + 0 < 100)
+                printf "PL1 is %sW — the CPU preset never reached performance. Check starch-power-watch.\n", pl1
+            else if (gu/n > 90 && lim > 0 && gw/n > lim * 0.80)
+                print "GPU-bound at its power limit. The card is fully used — nothing is capping you."
+            else if (gu/n > 90)
+                print "GPU-bound with power headroom and no throttling — normal for a GPU-heavy scene."
+            else
+                print "GPU util is low with power and thermal headroom — CPU-bound, or something is capping. Worth digging."
+        }
+    ' INTERVAL="$INTERVAL" "$CSV"
+}
+
+# Steam's own UI sounds keep a stream on the default sink for the whole session,
+# which is why a silent game still "has working audio" from the outside. So the
+# streams are split by app: the question is only ever about the non-Steam ones.
+summarize_audio() {
+    [ -r "$AUDIO" ] || return 0
+    echo
+    awk '
+        function kv(   i, p) {
+            delete F
+            for (i = 3; i <= NF; i++) {
+                p = index($i, "=")
+                if (p) F[substr($i, 1, p - 1)] = substr($i, p + 1)
+            }
+        }
+        function note(app, sink,   k) {
+            k = app SUBSEP sink
+            if (!(k in seen)) { seen[k] = 1; sinks[app] = sinks[app] (sinks[app] ? "," : "") sink }
+        }
+        /^#/ { next }
+        $2 ~ /^default=/ {
+            cur = substr($2, 9)
+            if (!(cur in defseen)) { defseen[cur] = 1; ndef++; deflist = deflist (deflist ? " -> " : "") cur }
+            next
+        }
+        $2 == "sink" {
+            kv()
+            if (F["name"] == cur) {
+                if (!(F["state"] in stseen)) { stseen[F["state"]] = 1; states = states (states ? "/" : "") F["state"] }
+                defmute = F["mute"]; defvol = F["vol"]; defport = F["port"]
+            }
+            next
+        }
+        $2 == "nostream" { blank++; next }
+        $2 == "stream" {
+            kv()
+            app = F["app"]
+            # Steam itself always has a stream; it proves nothing about the game.
+            isgame = (app !~ /^([Ss]team|steamwebhelper|Chromium|gamescope|mangoapp|pw-cat|speech-dispatcher)$/)
+            samples[app]++
+            if (isgame) { games[app] = 1; gsamples++ }
+            note(app, F["sink"])
+            if (F["corked"] == "true") corked[app]++
+            if (F["mute"]   == "true") muted[app]++
+            if (F["vol"] + 0 == 0) zerovol[app]++
+            if (F["sink"] != cur) offdefault[app]++
+            if (F["target"] != "-") pinned[app] = F["target"]
+            next
+        }
+        END {
+            print "audio"
+            printf "  default sink : %s%s\n", (deflist ? deflist : "?"), (ndef > 1 ? "  (CHANGED mid-run)" : "")
+            printf "  sink states  : %s   mute=%s vol=%s port=%s\n", \
+                (states ? states : "?"), defmute, defvol, defport
+
+            if (!length(samples)) {
+                print "  streams      : none — not even Steam. pactl saw nothing; the probe itself may have failed."
+                print "\naudio verdict: no data. Check that jq and pactl work inside the session."
+                exit
+            }
+
+            print "  streams seen :"
+            for (a in samples)
+                printf "    %-28s samples=%-5d sink=%s%s%s%s%s\n", a, samples[a], sinks[a], \
+                    (corked[a]   ? "  corked=" corked[a]     : ""), \
+                    (muted[a]    ? "  MUTED="  muted[a]      : ""), \
+                    (zerovol[a]  ? "  vol0="   zerovol[a]    : ""), \
+                    (pinned[a]   ? "  target=" pinned[a]     : "")
+
+            printf "\naudio verdict: "
+            if (!gsamples) {
+                print "NO GAME STREAM. Steam had a sink-input the whole run and the game never opened one."
+                print "  The game is not reaching PipeWire at all — look at the Proton/wine audio driver"
+                print "  and whether the pulse socket is visible inside the pressure-vessel container,"
+                print "  not at routing. Nothing on the host side can fix this."
+                exit
+            }
+            bad = 0
+            for (a in games) {
+                if (offdefault[a]) {
+                    printf "MISROUTED. %s played to %s while the default was %s.\n", a, sinks[a], cur
+                    print "  Fix live with: pactl move-sink-input <idx> " cur
+                    print "  This is what starch-osd sink-cycle already does — it just is not bound in the Steam session."
+                    bad = 1
+                } else if (muted[a] == samples[a]) {
+                    printf "MUTED AT THE STREAM. %s was muted for every sample.\n", a; bad = 1
+                } else if (zerovol[a] == samples[a]) {
+                    printf "ZERO STREAM VOLUME. %s sat at 0%% for every sample.\n", a; bad = 1
+                } else if (corked[a] == samples[a]) {
+                    printf "CORKED. %s held a stream but never unpaused it — the game muted itself.\n", a; bad = 1
+                }
+            }
+            if (bad) exit
+            if (states !~ /RUNNING/) {
+                print "SINK NEVER RAN. A game stream was attached but the sink stayed " states "."
+                print "  The graph is right and no audio was pushed to the device — suspect the device side."
+                exit
+            }
+            print "Graph is correct — game stream on the default sink, unmuted, sink RUNNING."
+            print "  If it was silent, the loss is below PipeWire: the amp, the active port, or hardware"
+            print "  volume. Try starch-speaker-rearm."
+        }
+    ' "$AUDIO"
+}
+
+SAMPLER=""
+AUDIO_SAMPLER=""
+GAME=""
+cleanup() {
+    if [ -n "$SAMPLER" ]; then
+        kill "$SAMPLER" 2>/dev/null
+        wait "$SAMPLER" 2>/dev/null
+    fi
+    if [ -n "$AUDIO_SAMPLER" ]; then
+        kill "$AUDIO_SAMPLER" 2>/dev/null
+        wait "$AUDIO_SAMPLER" 2>/dev/null
+        # Unconditional final probe: the state at the moment of quit is worth
+        # having even when it matches the last change-triggered write.
+        audio_write
+    fi
+    { summarize; summarize_audio; } | tee "$TXT"
+    echo
+    echo "raw:     $CSV"
+    echo "audio:   $AUDIO"
+    echo "summary: $TXT"
+}
+trap cleanup EXIT
+
+sample_loop &
+SAMPLER=$!
+
+audio_header
+audio_loop &
+AUDIO_SAMPLER=$!
+
+if [ "$#" -gt 0 ]; then
+    # The game runs in the background and we wait on it, rather than running it
+    # in the foreground. Bash defers a trapped signal until the current
+    # foreground command returns, so a SIGTERM aimed at the wrapper alone would
+    # otherwise sit unhandled for the entire length of the game, and the summary
+    # would cover a window nobody asked for.
+    "$@" &
+    GAME=$!
+    trap 'kill -TERM "$GAME" 2>/dev/null' INT TERM
+
+    # wait returns early when a trap fires, so loop until the game is really
+    # gone and rc holds its status rather than the signal's.
+    rc=0
+    while :; do
+        wait "$GAME"
+        rc=$?
+        kill -0 "$GAME" 2>/dev/null || break
+    done
+    exit "$rc"
+fi
+
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo "starch-gameload: sampling to $CSV — Ctrl-C to stop"
+wait "$SAMPLER"

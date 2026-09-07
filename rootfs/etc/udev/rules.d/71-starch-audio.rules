@@ -1,0 +1,20 @@
+# Keep the TAS2781 smart amp powered so its DSP program stays resident.
+#
+# The amp runtime-suspends 3s after the speakers go idle and drops its program;
+# the driver only reloads it from the playback hook, so the next stream races
+# that reload and sometimes loses. When it loses, the sink, the active port, the
+# Speaker/Headphone switches and every volume read correct and nothing comes out
+# — which is indistinguishable from working audio until you notice the silence.
+#
+# starch-speaker-rearm still exists for the manual case, but it only ever fired
+# on a headphone-jack event, and the idle suspend happens whether or not
+# headphones are involved. Pinning runtime PM removes the race instead of
+# reacting to it: no suspend, no dropped program, nothing to lose.
+#
+# Costs the amp's idle draw, which is why this is a rule and not a default.
+# Match on the driver rather than the ACPI id so other TAS2781 machines are
+# covered; the KERNEL match is the fallback for when the bind event beats the
+# driver link being readable. "change" is included so a udevadm trigger
+# reapplies the pin to the device that is already present, without a reboot.
+ACTION=="add|bind|change", SUBSYSTEM=="i2c", DRIVER=="tas2781-hda", ATTR{power/control}="on"
+ACTION=="add|bind|change", SUBSYSTEM=="i2c", KERNEL=="i2c-TIAS2781:*", ATTR{power/control}="on"
