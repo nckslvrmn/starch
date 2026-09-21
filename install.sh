@@ -170,8 +170,10 @@ while IFS= read -r -d '' src; do
     [ -x "$src" ] && mode=755
     case "$dst" in /etc/sudoers.d/*) mode=440 ;; esac
 
+    # modconf bakes modprobe.d into the initramfs, so options for modules loaded
+    # from there stay inert until a rebuild.
     case "$dst" in
-        /etc/mkinitcpio.conf.d/*)
+        /etc/mkinitcpio.conf.d/*|/etc/modprobe.d/*)
             cmp -s "$src" "$dst" 2>/dev/null || NEED_INITRAMFS=1 ;;
     esac
 

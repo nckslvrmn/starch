@@ -35,10 +35,14 @@ systemctl --user start starch-perf-mode.service >/dev/null 2>&1 || \
 STARCH_SESSION_PRE_END='systemctl --user stop starch-perf-mode.service >/dev/null 2>&1 || true'
 
 # --rt needs CAP_SYS_NICE (install.sh grants it, a pacman hook keeps it), else
-# gamescope drops to normal priority. --hdr-enabled covers the internal panel
-# (DisplayHDR-400-class IPS, ~497 nits by EDID) and HDR externals. SDR games
-# still direct-scanout with no penalty.
-GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --hdr-enabled --mangoapp)
+# gamescope drops to normal priority.
+GAMESCOPE_ARGS=(--backend drm --steam -f --rt --adaptive-sync --mangoapp)
+
+# HDR drives the panel at 10 bpc. On the internal 2560x1600 panel that needs
+# ~31Gbit/s at 240Hz against an eDP HBR3 budget of ~26, so the link has to fall
+# back to DSC; 8 bpc fits without it. gamescope has no flag to turn HDR back
+# off, hence the gate here rather than an entry in the block below.
+[ "${STARCH_HDR:-1}" = "1" ] && GAMESCOPE_ARGS+=(--hdr-enabled)
 
 REFRESH=$(starch_probe_refresh)
 [ -n "$REFRESH" ] && GAMESCOPE_ARGS+=(-r "$REFRESH") && echo "[steam-session] refresh: ${REFRESH}Hz"

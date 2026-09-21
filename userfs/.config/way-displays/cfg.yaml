@@ -13,8 +13,13 @@ ORDER:
 # crisp.
 AUTO_SCALE: FALSE
 
-# Use each output's highest mode, not just its preferred one.
-MAX_PREFERRED_REFRESH: FALSE
+# 60 on a 240Hz panel is deliberate; the Steam session is what drives max
+# refresh. Pinned rather than left to way-displays' preferred-mode default.
+MODE:
+  eDP-1:
+    WIDTH: 2560
+    HEIGHT: 1600
+    HZ: 60
 
 DISABLED: []
 
